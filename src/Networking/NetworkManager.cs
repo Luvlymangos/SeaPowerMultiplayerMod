@@ -753,6 +753,7 @@ namespace SeapowerMultiplayer
                 DoctrineSyncManager.Reset();
                 SensorStateManager.Reset();
                 JamStateManager.Reset();
+                Campaign.CampaignSync.Reset();
                 UnitStatusManager.Reset();
                 OrderRefusalNotice.Reset();
                 AttackDesignationSync.Reset();
@@ -1155,6 +1156,43 @@ namespace SeapowerMultiplayer
                     var msg = DamageDecalMessage.Deserialize(reader);
                     _mainThreadQueue.Enqueue(() => CombatEventHandler.RunAsNetworkEvent(
                         () => DamageStateSerializer.ApplyDecal(msg)));
+                    break;
+                }
+
+                // ── Co-op campaign layer (fork) ──────────────────────────────
+                case MessageType.CampaignCommand:
+                {
+                    var msg = CampaignCommandMessage.Deserialize(reader);
+                    byte slot = SlotOf(from);
+                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleCommand(slot, msg));
+                    break;
+                }
+
+                case MessageType.CampaignCommandResult:
+                {
+                    var msg = CampaignCommandResultMessage.Deserialize(reader);
+                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleResult(msg));
+                    break;
+                }
+
+                case MessageType.CampaignSnapshotChunk:
+                {
+                    var msg = CampaignSnapshotChunkMessage.Deserialize(reader);
+                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleSnapshotChunk(msg));
+                    break;
+                }
+
+                case MessageType.CampaignResyncRequest:
+                {
+                    var msg = CampaignResyncRequestMessage.Deserialize(reader);
+                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleResyncRequest(msg));
+                    break;
+                }
+
+                case MessageType.CampaignOwnership:
+                {
+                    var msg = CampaignOwnershipMessage.Deserialize(reader);
+                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleOwnership(msg));
                     break;
                 }
 

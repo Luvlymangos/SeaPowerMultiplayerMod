@@ -149,6 +149,9 @@ namespace SeapowerMultiplayer
         // Shared tactical picture
         internal ConfigEntry<bool> CfgContactSync = null!;
         internal ConfigEntry<bool> CfgDrawingSync = null!;
+        internal ConfigEntry<bool> CfgCampaignSync = null!;
+        internal ConfigEntry<bool> CfgCampaignAutoSendBattles = null!;
+        internal ConfigEntry<float> CfgCampaignSnapshotIntervalSec = null!;
 
         // Opt-in diagnostics
         internal ConfigEntry<bool>   CfgShareDiagnostics = null!;
@@ -264,6 +267,22 @@ namespace SeapowerMultiplayer
                 "CO-OP ONLY. Share map drawings (markers, rulers, circles, polygons, text) between " +
                 "both players. Either side may draw; the whole layer is replaced on the other side " +
                 "when it changes. Ignored in PvP.");
+
+            // Co-op campaign layer (fork). Inert unless a supported campaign mod is loaded.
+            CfgCampaignSync = Config.Bind("Campaign", "CampaignSync", true,
+                "CO-OP ONLY, TWO PLAYERS. Share a campaign mod's strategic map (first target: " +
+                "Bungalow's Dynamic Campaign). The host runs the campaign; the guest's map actions " +
+                "are sent to the host and its campaign AI is switched off. Ignored in PvP and when " +
+                "no supported campaign mod is installed.");
+            CfgCampaignAutoSendBattles = Config.Bind("Campaign", "AutoSendBattles", true,
+                "When the host's campaign launches a battle, send it to the guest automatically " +
+                "once it finishes loading (same as pressing Send). Each player starts the battle " +
+                "owning their own Career post's units; everything else starts with the host, who " +
+                "can send formations to the guest as usual.");
+            CfgCampaignSnapshotIntervalSec = Config.Bind("Campaign", "SnapshotIntervalSec", 1f,
+                "Seconds between campaign-map state updates sent to the guest while the campaign " +
+                "clock runs (default 1). Lower = smoother guest map, more bandwidth. The guest's " +
+                "map moves fleets between updates on its own, so 1-2 s is usually enough.");
 
             // Opt-in diagnostics. Off until the player says otherwise; nothing is
             // captured or sent while it is off. See PRIVACY.md.
@@ -534,6 +553,9 @@ namespace SeapowerMultiplayer
 
             // Check for pending session sync retries (failed sends)
             SessionManager.TickRetry();
+
+            // Co-op campaign layer (fork): command routing + snapshot stream
+            Campaign.CampaignSync.Tick();
 
             // Hold the sim frozen while a dropped peer is being recovered
             ReconnectManager.Tick();

@@ -46,6 +46,13 @@ namespace SeapowerMultiplayer.Messages
         SideRelation             = 42,  // host → clients: a side pair's relationship changed during play
         TriggerFired             = 43,  // host → clients: a mission trigger fired (client plays its presentation)
         TriggerRequest           = 44,  // client → host: the player chose a trigger to fire (free-content window)
+
+        // ── Co-op campaign layer (fork) ──────────────────────────────────────
+        CampaignCommand          = 45,  // client → host: guest action on the campaign map
+        CampaignCommandResult    = 46,  // host → client: accept/refuse verdict for one command
+        CampaignSnapshotChunk    = 47,  // host → client: one gzipped chunk of the campaign state
+        CampaignResyncRequest    = 48,  // client → host: send me a full campaign snapshot
+        CampaignOwnership        = 49,  // host → client: who holds which campaign post / asset
     }
 
     public interface INetMessage
