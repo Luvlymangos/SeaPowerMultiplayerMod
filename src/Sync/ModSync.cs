@@ -80,17 +80,11 @@ namespace SeapowerMultiplayer
             if (IsHost) HostTick(); else GuestTick();
         }
 
-        private static void HostTick()
-        {
-            var players = PlayerRegistry.All;
-            for (int i = 0; i < players.Count; i++)
-            {
-                var p = players[i];
-                if (p == null || !p.Connected || p.Slot == PlayerRegistry.LocalSlot || _sentTo.Contains(p.Slot)) continue;
-                _sentTo.Add(p.Slot);
-                SendList(p.Slot);
-            }
-        }
+        private static void HostTick() { }   // the guest asks (RequestText) once it is fully connected
+
+        /// <summary>Guest → host report text that means "send me your list".</summary>
+        private const string RequestText = "\u0001send-list";
+        private static bool _requested;
 
         private static void SendList(byte slot)
         {
@@ -118,6 +112,12 @@ namespace SeapowerMultiplayer
         internal static void HandleReport(byte fromSlot, ModSyncReportMessage msg)
         {
             if (!IsHost) return;
+            if (msg.Summary == RequestText)
+            {
+                Plugin.Log.LogInfo($"[ModSync] {PlayerRegistry.DisplayName(fromSlot)} asked for my mod list.");
+                SendList(fromSlot);
+                return;
+            }
             string who = PlayerRegistry.DisplayName(fromSlot);
             if (msg.Summary.Length == 0) { Plugin.Log.LogInfo($"[ModSync] {who}'s mods match."); return; }
             Plugin.Log.LogInfo($"[ModSync] {who}: {msg.Summary}");
@@ -143,6 +143,11 @@ namespace SeapowerMultiplayer
 
         private static void Apply(Entry[] host)
         {
+            Plugin.Log.LogInfo($"[ModSync] Host has {host.Length} mods enabled: " +
+                               string.Join(", ", host.Select(e => e.WorkshopId != 0 ? $"{e.Name} [{e.WorkshopId}]" : $"{e.Name} [local:{e.Key}]")));
+            var before = SettingsMods();
+            Plugin.Log.LogInfo($"[ModSync] I have {before.Count} mods in my list, {before.Count(d => d.IsChecked)} ticked: " +
+                               string.Join(", ", before.Select(d => $"{(d.IsChecked ? "+" : "-")}{d.Name} [{d.DirectoryInfo.Name}{(d.IsSteam ? "" : ", local")}]")));
             var notes = new List<string>();
             bool restart = false;
 
@@ -223,6 +228,8 @@ namespace SeapowerMultiplayer
                 if (d.IsChecked != shouldBeOn)
                 {
                     d.IsChecked = shouldBeOn;
+                    if (d.IsChecked != shouldBeOn)
+                        Plugin.Log.LogWarning($"[ModSync] The game refused to {(shouldBeOn ? "tick" : "untick")} {d.Name} [{d.DirectoryInfo.Name}] (enabled={d.IsEnabled}).");
                     changed.Add((shouldBeOn ? "turned on " : "turned off ") + (string.IsNullOrEmpty(d.Name) ? d.DirectoryInfo.Name : d.Name));
                     any = true;
                 }
@@ -243,13 +250,37 @@ namespace SeapowerMultiplayer
             if (any)
             {
                 fm.SaveDirectories(dirs);
-                Plugin.Log.LogInfo("[ModSync] Mod list changed: " + string.Join("; ", changed));
+                Plugin.Log.LogInfo("[ModSync] Mod list changed and saved: " + string.Join("; ", changed));
+                // Read it back: if something (the game, Steam, a mod loader) puts a mod
+                // back, say so instead of silently looping on restarts.
+                var after = fm.GetSearchDirectories();
+                var wrong = new List<string>();
+                if (after != null)
+                    foreach (var d in after)
+                    {
+                        if (d == null || !d.IsSettingsMod || d.DirectoryInfo == null) continue;
+                        bool shouldBeOn = wanted.ContainsKey(d.DirectoryInfo.Name);
+                        if (!shouldBeOn && !Plugin.Instance.CfgModSyncDisableExtras.Value) continue;
+                        if (d.IsChecked != shouldBeOn) wrong.Add($"{d.Name} [{d.DirectoryInfo.Name}] is {(d.IsChecked ? "on" : "off")}");
+                    }
+                if (wrong.Count > 0)
+                    Plugin.Log.LogWarning("[ModSync] After saving, these still don't match: " + string.Join("; ", wrong));
+            }
+            else
+            {
+                Plugin.Log.LogInfo("[ModSync] Mod list already matches the host's ticks and order.");
             }
             return any;
         }
 
         private static void GuestTick()
         {
+            if (!_requested)
+            {
+                _requested = true;
+                Plugin.Log.LogInfo("[ModSync] Connected - asking the host for its mod list.");
+                NetworkManager.Instance.SendToServer(new ModSyncReportMessage { Summary = RequestText });
+            }
             if (_waitingFor.Count == 0 || _incoming == null) return;
             foreach (var id in _waitingFor.ToList())
             {
@@ -287,6 +318,7 @@ namespace SeapowerMultiplayer
             _sentTo.Clear();
             _incoming = null;
             _received = 0;
+            _requested = false;
             // Downloads already asked of Steam carry on regardless.
             _waitingFor.Clear();
         }
