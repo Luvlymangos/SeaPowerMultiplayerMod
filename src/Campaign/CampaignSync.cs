@@ -172,6 +172,7 @@ namespace SeapowerMultiplayer.Campaign
         /// <summary>Lazy: other BepInEx plugins (the campaign mod) may load after us,
         /// so look on first tick rather than in Awake.</summary>
         private static float _nextResolveAt;
+        private static MultiCampaignAdapter? _multi;
         private static bool _loggedNone;
 
         private static void ResolveAdapter()
@@ -185,8 +186,9 @@ namespace SeapowerMultiplayer.Campaign
 
             ICampaignAdapter[] candidates =
             {
-                new DynamicCampaignForkAdapter(),   // Pacific 2027 (first target)
-                new BungalowCampaignAdapter(),
+                // Both Dynamic Campaign mods, live side by side: the fork (Pacific 2027)
+                // and Bungalow's original.
+                _multi ??= new MultiCampaignAdapter(DynamicCampaignAdapter.Fork(), DynamicCampaignAdapter.Base()),
             };
 
             foreach (var c in candidates)
@@ -686,6 +688,7 @@ namespace SeapowerMultiplayer.Campaign
         private static void ApplySnapshot(uint rev, string state, CampaignPhase phase, string adapterId, string modVersion,
                                           double hostClock, float hostTimeScale)
         {
+            _multi?.Prefer(adapterId);
             if (adapterId != _adapter.AdapterId)
             {
                 SimSyncManager.ReportIssue("Campaign mod mismatch.",

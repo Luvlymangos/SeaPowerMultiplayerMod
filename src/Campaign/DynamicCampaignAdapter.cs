@@ -47,26 +47,49 @@ namespace SeapowerMultiplayer.Campaign
     /// OWNERSHIP: keys "tf:{id}" (task force) and "fl:{id}" (flight). Everything is
     /// Shared until claimed (Ctrl+F7 on the selected one).
     /// </summary>
-    public sealed class DynamicCampaignForkAdapter : ICampaignAdapter
+    public sealed class DynamicCampaignAdapter : ICampaignAdapter
     {
-        private const string Ns = "DynamicCampaignModFork.";
+        private readonly string Ns;            // "DynamicCampaignModFork." / "DynamicCampaignMod."
+        private readonly string _id;           // wire id: "dcm-fork" / "dcm"
+        private readonly string Tag;           // log tag: "fork" / "dcm"
+        private readonly string _label;        // "Dynamic Campaign Mod (fork)"
+        private readonly string _campaignsFolder;   // next to the mod's dll: "fork_campaigns" / "dynamic_campaigns"
+
+        public DynamicCampaignAdapter(string ns, string id, string tag, string label, string campaignsFolder)
+        {
+            Ns = ns; _id = id; Tag = tag; _label = label; _campaignsFolder = campaignsFolder;
+        }
+
+        /// <summary>Pacific 2027 and the other fork campaigns (Workshop 3820272150).</summary>
+        public static DynamicCampaignAdapter Fork() =>
+            new("DynamicCampaignModFork.", "dcm-fork", "fork", "Dynamic Campaign Mod (fork)", "fork_campaigns");
+
+        /// <summary>Bungalow's original Dynamic Campaign Mod (Workshop 3813157776).</summary>
+        public static DynamicCampaignAdapter Base() =>
+            new("DynamicCampaignMod.", "dcm", "dcm", "Dynamic Campaign Mod", "dynamic_campaigns");
 
         // ── Types ─────────────────────────────────────────────────────────────
         private Type? _tSession, _tBattle, _tSim, _tState, _tSave, _tHeader, _tDefinition,
                       _tMover, _tTaskForce, _tFlight, _tHull, _tGeo, _tRoutePoint,
                       _tBaseDef, _tPendingFlight, _tMirror,
                       _tCatalogue, _tBuildOrder, _tAdmOrder, _tAdmOp, _tRelief, _tStation, _tPendingMerge,
-                      _tSquadron, _tGroundUnit, _tRefitCount, _tVlsTargetCell;
+                      _tSquadron, _tGroundUnit, _tRefitCount, _tVlsTargetCell, _tShipFit, _tFrontSupport, _tDefenceOffer;
         private bool _probed, _found;
         private float _nextProbeAt;
         private string _version = "";
 
-        public string AdapterId => "dcm-fork";
+        public string AdapterId => _id;
         public bool IsAvailable { get { Probe(); return _found; } }
         public string ModVersion { get { Probe(); return _version; } }
         public event Action? StateChanged;
 
-        private static DynamicCampaignForkAdapter? _instance;
+        /// <summary>Both mods can be loaded at once; Harmony callbacks find their adapter
+        /// by the patched method's assembly.</summary>
+        private static readonly Dictionary<Assembly, DynamicCampaignAdapter> _byAssembly = new();
+        private static DynamicCampaignAdapter? For(MethodBase? m) =>
+            m?.DeclaringType != null && _byAssembly.TryGetValue(m.DeclaringType.Assembly, out var a) ? a : null;
+        private static DynamicCampaignAdapter? For(object? o) =>
+            o != null && _byAssembly.TryGetValue(o.GetType().Assembly, out var a) ? a : null;
 
         private Type? T(string name) => CampaignInterceptor.FindType(Ns + name);
 
@@ -107,6 +130,9 @@ namespace SeapowerMultiplayer.Campaign
             _tGroundUnit   = T("Core.State.GroundUnit");
             _tRefitCount   = T("Core.Sim.RefitCount");
             _tVlsTargetCell= T("Core.State.VlsTargetCell");
+            _tShipFit      = T("Core.Data.ShipFit");
+            _tFrontSupport = T("Core.State.FrontSupport");
+            _tDefenceOffer = T("Core.Data.DefenceOffer");
 
             var missing = new List<string>();
             foreach (var (n, t) in new (string, Type?)[] {
@@ -116,7 +142,7 @@ namespace SeapowerMultiplayer.Campaign
                 if (t == null) missing.Add(n);
             if (missing.Count > 0)
             {
-                Plugin.Log.LogError("[Campaign] fork: found the mod but not " + string.Join(", ", missing) +
+                Plugin.Log.LogError($"[Campaign] {Tag}: found the mod but not " + string.Join(", ", missing) +
                                     " - a different version? Co-op campaign stays off.");
                 return;
             }
@@ -124,9 +150,9 @@ namespace SeapowerMultiplayer.Campaign
             var asm = _tSession.Assembly;
             _version = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
                        ?? asm.GetName().Version?.ToString() ?? "unknown";
-            _instance = this;
+            _byAssembly[asm] = this;
             _found = true;
-            Plugin.Log.LogInfo($"[Campaign] fork: Dynamic Campaign Mod (fork) {_version} found - co-op campaign available.");
+            Plugin.Log.LogInfo($"[Campaign] {Tag}: {_label} {_version} found - co-op campaign available.");
 
             HookStateChanges();
             BindActions();
@@ -215,7 +241,7 @@ namespace SeapowerMultiplayer.Campaign
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"[Campaign] fork: SelectedAssetKey failed: {ex.Message}");
+                Plugin.Log.LogWarning($"[Campaign] {Tag}: SelectedAssetKey failed: {ex.Message}");
                 return null;
             }
         }
@@ -261,6 +287,7 @@ namespace SeapowerMultiplayer.Campaign
         {
             ("PendingFlights", true), ("BuildOrders", true), ("AdmiraltyOrders", true),
             ("Operations", true), ("ReliefStations", true), ("GroundUnits", true), ("Squadrons", false),
+            ("FrontSupports", true),   // base mod
         };
         private readonly Dictionary<string, Dictionary<string, int>> _listSent = new();
 
@@ -281,6 +308,10 @@ namespace SeapowerMultiplayer.Campaign
             // Player-edited (guests send theirs with field.set) and the refit queues.
             ("Drawings", true), ("SupplyPriorities", true), ("SupplySources", true),
             ("NativeAirWingRefitOrders", false), ("NativeVlsRefitOrders", false),
+            // Base mod only (skipped where a field doesn't exist).
+            ("OffersHeld", true), ("EmconDefault", true), ("WarWill", true), ("CareerProgress", true),
+            ("Player", false), ("Service", false), ("IntelReports", false), ("Fronts", false), ("SeaLanes", false),
+            ("Defenders", false), ("FleetBaseChoices", false), ("Command", false), ("BrokeAway", false), ("Fought", false),
         };
         private readonly Dictionary<string, int> _fieldSent = new();
         private int _deltaCount;
@@ -395,6 +426,7 @@ namespace SeapowerMultiplayer.Campaign
             _feedSent.Clear();
             if (F(state, "Feed") is IList feed) foreach (var x in feed) if (x != null) _feedSent.Add(x);
             _radarSent = RadarOf(state);
+            _refitSent = RefittingOf(state);
             _fieldSent.Clear();
             foreach (var (field, _) in TrackedFields)
             {
@@ -408,7 +440,7 @@ namespace SeapowerMultiplayer.Campaign
                 if (F(state, field) is IList l) foreach (var x in l) if (x != null) d[IdOf(x)] = ElemHash(x);
             }
 
-            Plugin.Log.LogInfo($"[Campaign] fork: full copy captured ({json.Length / 1024} KB, {_sent.Count} movers).");
+            Plugin.Log.LogInfo($"[Campaign] {Tag}: full copy captured ({json.Length / 1024} KB, {_sent.Count} movers).");
             return "F\n" + json;
         }
 
@@ -430,6 +462,13 @@ namespace SeapowerMultiplayer.Campaign
                 return (int)h;
             }
         }
+
+        private string _refitSent = "";
+
+        private static string RefittingOf(object state) =>
+            F(state, "Refitting") is IList rf
+                ? string.Join(",", rf.Cast<object>().Where(h => h != null).Select(h => Convert.ToString(F(h, "Id"), CultureInfo.InvariantCulture)))
+                : "";
 
         private static string RadarOf(object state) =>
             F(state, "RadarContacts") is IList rc ? string.Join("\u001f", rc.Cast<object>()) : "";
@@ -521,6 +560,15 @@ namespace SeapowerMultiplayer.Campaign
                 changes++;
             }
 
+            // Base mod: ships in the refit yards, as ids (they are the task forces' own hulls).
+            string refit = RefittingOf(state);
+            if (refit != _refitSent)
+            {
+                _refitSent = refit;
+                sb.Append("rfh ").Append(refit).Append('\n');
+                changes++;
+            }
+
             string radar = RadarOf(state);
             if (radar != _radarSent)
             {
@@ -597,11 +645,16 @@ namespace SeapowerMultiplayer.Campaign
             _fullWaitSince = -1f;
             _heldFull = null;
 
-            var def = Definition ?? _lastDefinition ?? LoadDefinitionFor(json);
+            // The host's campaign, not whichever one this guest happens to have open.
+            string? wantId = Regex.Match(json, "\"CampaignId\"\\s*:\\s*\"([^\"]+)\"") is { Success: true } mm ? mm.Groups[1].Value : null;
+            object? def = null;
+            foreach (var d in new[] { Definition, _lastDefinition })
+                if (d != null && (wantId == null || DefId(d) == wantId)) { def = d; break; }
+            def ??= LoadDefinitionFor(json);
             if (def == null)
             {
-                SimSyncManager.ReportIssue("Open Pacific 2027 to join the host's campaign.",
-                    "Load any Pacific 2027 save (or start a new one), then press Ctrl+F6.");
+                SimSyncManager.ReportIssue($"Couldn't find the host's campaign ({wantId ?? "unknown"}).",
+                    $"Make sure {_label} is installed and up to date, open any of its campaigns, then press Ctrl+F6.");
                 return;
             }
             _lastDefinition = def;
@@ -619,9 +672,12 @@ namespace SeapowerMultiplayer.Campaign
             _pendingState = state;
             var load = AccessTools.Method(_tSession, "Load", new[] { _tDefinition!, _tState! })
                        ?? throw new MissingMethodException("CampaignSession.Load");
-            Plugin.Log.LogInfo($"[Campaign] fork: loading the host's campaign ({json.Length / 1024} KB).");
+            Plugin.Log.LogInfo($"[Campaign] {Tag}: loading the host's campaign ({json.Length / 1024} KB).");
             load.Invoke(null, new[] { def, state });
         }
+
+        private string? DefId(object def) =>
+            Convert.ToString(F(def, "id") ?? AccessTools.Property(def.GetType(), "Id")?.GetValue(def), CultureInfo.InvariantCulture);
 
         /// <summary>Guest not in the campaign yet: read the definition straight from
         /// the fork's folder (fork_campaigns/{name}/campaign.json).</summary>
@@ -634,13 +690,25 @@ namespace SeapowerMultiplayer.Campaign
                 string id = m.Groups[1].Value;
                 string folder = Path.GetDirectoryName(_tSession!.Assembly.Location)!;
                 string name = id.Substring(id.LastIndexOf('.') + 1);
-                string path = Path.Combine(folder, "fork_campaigns", name, "campaign.json");
-                if (!File.Exists(path)) return null;
+                string path = Path.Combine(folder, _campaignsFolder, name, "campaign.json");
+                if (!File.Exists(path))
+                {
+                    // Campaigns other mods add: every Workshop item / mod folder beside this one.
+                    path = "";
+                    var root = Path.GetDirectoryName(folder);
+                    if (root != null)
+                        foreach (var dir in Directory.GetDirectories(root))
+                        {
+                            var p = Path.Combine(dir, _campaignsFolder, name, "campaign.json");
+                            if (File.Exists(p)) { path = p; break; }
+                        }
+                    if (path.Length == 0) return null;
+                }
                 return AccessTools.Method(_tDefinition, "Load", new[] { typeof(string) })?.Invoke(null, new object[] { path });
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"[Campaign] fork: couldn't read the campaign definition: {ex.Message}");
+                Plugin.Log.LogWarning($"[Campaign] {Tag}: couldn't read the campaign definition: {ex.Message}");
                 return null;
             }
         }
@@ -750,6 +818,14 @@ namespace SeapowerMultiplayer.Campaign
                             AfterFieldApplied(state, fname);
                             break;
                         }
+                        case "rfh":
+                            if (F(state, "Refitting") is IList rfl)
+                            {
+                                rfl.Clear();
+                                foreach (var idText in rest.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                                    if (FindHull(int.Parse(idText, CultureInfo.InvariantCulture)) is object hull) rfl.Add(hull);
+                            }
+                            break;
                         case "radar":
                             if (F(state, "RadarContacts") is IList rc)
                             {
@@ -771,7 +847,7 @@ namespace SeapowerMultiplayer.Campaign
                 }
                 catch (Exception ex)
                 {
-                    Plugin.Log.LogWarning($"[Campaign] fork: couldn't apply '{kind}': {ex.Message}");
+                    Plugin.Log.LogWarning($"[Campaign] {Tag}: couldn't apply '{kind}': {ex.Message}");
                     lost = true;
                 }
             }
@@ -838,12 +914,12 @@ namespace SeapowerMultiplayer.Campaign
 
         private static bool _suppressed;
         private Harmony? _harmony;
-        private Harmony H => _harmony ??= new Harmony(PluginInfo.PLUGIN_GUID + ".campaign.fork");
+        private Harmony H => _harmony ??= new Harmony(PluginInfo.PLUGIN_GUID + ".campaign." + Tag);
 
         public void SetSimulationSuppressed(bool suppressed)
         {
             _suppressed = suppressed;
-            Plugin.Log.LogInfo($"[Campaign] fork: guest campaign simulation {(suppressed ? "OFF (host runs it)" : "back on")}.");
+            Plugin.Log.LogInfo($"[Campaign] {Tag}: guest campaign simulation {(suppressed ? "OFF (host runs it)" : "back on")}.");
         }
 
         private void HookStateChanges()
@@ -854,26 +930,26 @@ namespace SeapowerMultiplayer.Campaign
             var run = AccessTools.Method(_tSim, "Run", new[] { typeof(double) });
             if (run == null)
             {
-                Plugin.Log.LogError("[Campaign] fork: CampaignSim.Run(double) not found - co-op campaign can't gate the guest.");
+                Plugin.Log.LogError($"[Campaign] {Tag}: CampaignSim.Run(double) not found - co-op campaign can't gate the guest.");
                 _found = false;
                 return;
             }
             H.Patch(run,
-                prefix:  new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPrefix)),
-                postfix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPostfix)));
+                prefix:  new HarmonyMethod(typeof(DynamicCampaignAdapter), nameof(RunPrefix)),
+                postfix: new HarmonyMethod(typeof(DynamicCampaignAdapter), nameof(RunPostfix)));
 
             // The campaign has decided on a battle: Saves.BeforeBattle(where, now) runs
             // before the host starts loading it. Tell the guest straight away.
             var before = AccessTools.Method(T("Game.Session.Saves"), "BeforeBattle");
             if (before != null)
-                H.Patch(before, prefix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(BeforeBattlePrefix)));
+                H.Patch(before, prefix: new HarmonyMethod(typeof(DynamicCampaignAdapter), nameof(BeforeBattlePrefix)));
 
             // Owner colours on the map: after the fork sets each symbol's colour.
             var sync = AccessTools.Method(_tMirror, "Sync");
             if (sync != null)
-                H.Patch(sync, postfix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(MirrorSyncPostfix)));
+                H.Patch(sync, postfix: new HarmonyMethod(typeof(DynamicCampaignAdapter), nameof(MirrorSyncPostfix)));
             else
-                Plugin.Log.LogWarning("[Campaign] fork: MapMirror.Sync not found - claimed units won't be coloured.");
+                Plugin.Log.LogWarning($"[Campaign] {Tag}: MapMirror.Sync not found - claimed units won't be coloured.");
         }
 
         private static bool RunPrefix(ref int __result)
@@ -892,13 +968,14 @@ namespace SeapowerMultiplayer.Campaign
 
         private static void MirrorSyncPostfix(object __instance)
         {
-            try { _instance?.ApplyOwnerColors(__instance); }
+            var me = For(__instance);
+            try { me?.ApplyOwnerColors(__instance); }
             catch (Exception ex)
             {
-                if (_instance != null && UnityEngine.Time.unscaledTime - _instance._colorErrorAt > 30f)
+                if (me != null && UnityEngine.Time.unscaledTime - me._colorErrorAt > 30f)
                 {
-                    _instance._colorErrorAt = UnityEngine.Time.unscaledTime;
-                    Plugin.Log.LogWarning($"[Campaign] fork: owner colours failed: {ex.Message}");
+                    me._colorErrorAt = UnityEngine.Time.unscaledTime;
+                    Plugin.Log.LogWarning($"[Campaign] {me.Tag}: owner colours failed: {ex.Message}");
                 }
             }
         }
@@ -943,10 +1020,10 @@ namespace SeapowerMultiplayer.Campaign
             catch { /* never break the fork's battle start */ }
         }
 
-        private static void RunPostfix()
+        private static void RunPostfix(MethodBase __originalMethod)
         {
             CampaignSync.SimStepping = false;
-            _instance?.StateChanged?.Invoke();
+            For(__originalMethod)?.StateChanged?.Invoke();
         }
 
         // ══════════════════════════════════════════════════════════════════════
@@ -968,6 +1045,9 @@ namespace SeapowerMultiplayer.Campaign
             ("Core.Sim.Reliefs", "Reliefs"),
             ("Core.Sim.Invasions", "Invasions"),
             ("Core.Sim.Supply", "Supply"),
+            ("Core.Sim.Refits", "Refits"),          // base mod's refit yards (the fork has CarrierRefits there)
+            ("Core.Sim.Rebases", "Rebases"),        // base mod only
+            ("Core.Sim.FrontSupports", "Supports"), // base mod only
         };
 
         /// <summary>Player actions, by class. Everything else in these classes is
@@ -976,19 +1056,26 @@ namespace SeapowerMultiplayer.Campaign
         {
             ["Orders"]    = new[] { "SetCourse", "Reaim", "MoveWaypoint", "AddWaypoint", "Sortie", "FormTaskForce",
                                     "SplitAtSea", "Sort", "MoveShips", "Rename", "SetStation", "ResetFormation",
-                                    "SetLeader", "MergeRefused", "EndMerge", "MergeAll", "ReturnToBase" },
+                                    "SetLeader", "MergeRefused", "EndMerge", "MergeAll", "ReturnToBase",
+                                    // base mod
+                                    "LandAboard", "LandAtField", "SortieWhenCalm", "CancelSailWhenCalm", "SetSpeedStep" },
             ["Missions"]  = new[] { "Patrol", "Hunt", "Relieve", "Cap", "Search", "Redraw", "StrikeBase", "Refuel",
                                     "TankerStation", "Cover", "Escort", "Follow", "Rendezvous", "Replenish",
-                                    "Invade", "Join", "Cancel", "Course", "End" },
+                                    "Invade", "Join", "Cancel", "Course", "End",
+                                    // base mod
+                                    "StrikeRail", "CoverLane", "ReturnToPort", "CoverLanding", "GuardBase", "LandBeach",
+                                    "StrikeSite", "FrontSupport", "LandAtField", "LandAboard" },
             ["Strikes"]   = new[] { "Strike", "Release" },
             ["Air"]       = new[] { "Prepare", "Launch", "Cancel", "Detach" },
-            ["Admiralty"] = new[] { "Accept", "Decline" },
-            ["Shipyards"] = new[] { "Order", "Cancel", "Deliver" },
-            ["Refits"]    = new[] { "SaveDraft", "Cancel" },
+            ["Admiralty"] = new[] { "Accept", "Decline", "HandDown", "TakeBack" },
+            ["Shipyards"] = new[] { "Order", "Cancel", "Deliver", "Decommission" },
+            ["Refits"]    = new[] { "SaveDraft", "Cancel", "Order" },
             ["VlsRefits"] = new[] { "SaveDraft", "Cancel" },
             ["Wings"]     = new[] { "Replenish" },
             ["Reliefs"]   = new[] { "Begin", "Stop" },
-            ["Invasions"] = new[] { "Embark", "Disembark", "Land" },
+            ["Invasions"] = new[] { "Embark", "Disembark", "Land", "Reroute", "SetEmpty", "BuyDefence" },
+            ["Rebases"]   = new[] { "FlyHome" },
+            ["Supports"]  = new[] { "Assign", "Recall" },
             ["Supply"]    = new[] { "Hold", "Resume", "Reroute", "SetSource" },   // the Convoys panel
         };
 
@@ -1008,7 +1095,7 @@ namespace SeapowerMultiplayer.Campaign
                     bool predict = !Syncable(m) && Predictable(m);
                     if (Syncable(m) || predict)
                     {
-                        string id = $"{simField}.{m.Name}/{string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name))}";
+                        string id = $"{_id}:{simField}.{m.Name}/{string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name))}";
                         var method = m;
                         string field = simField;
                         CampaignInterceptor.Bind(new CampaignInterceptor.Binding
@@ -1021,6 +1108,12 @@ namespace SeapowerMultiplayer.Campaign
                         });
                         synced++;
                     }
+                    else if (t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly)
+                              .Any(o => o != m && o.Name == m.Name && (Syncable(o) || Predictable(o))))
+                    {
+                        // Another overload is shared (e.g. LandBeach(cell) calls
+                        // LandBeach(cellId)): let this one run and forward the inner call.
+                    }
                     else
                     {
                         BindHostOnly(m);
@@ -1028,7 +1121,7 @@ namespace SeapowerMultiplayer.Campaign
                     }
                 }
             }
-            Plugin.Log.LogInfo($"[Campaign] fork: {synced} player actions shared with the host, {hostOnly} host-only.");
+            Plugin.Log.LogInfo($"[Campaign] {Tag}: {synced} player actions shared with the host, {hostOnly} host-only.");
         }
 
         /// <summary>Can be sent to the host: every argument encodes, and the return
@@ -1068,18 +1161,18 @@ namespace SeapowerMultiplayer.Campaign
                 var prefix = m.ReturnType == typeof(string)
                     ? nameof(HostOnlyStringPrefix)
                     : nameof(HostOnlyPrefix);
-                H.Patch(m, prefix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), prefix));
+                H.Patch(m, prefix: new HarmonyMethod(typeof(DynamicCampaignAdapter), prefix));
             }
             catch (Exception ex)
             {
-                Plugin.Log.LogWarning($"[Campaign] fork: couldn't guard {m.DeclaringType?.Name}.{m.Name}: {ex.Message}");
+                Plugin.Log.LogWarning($"[Campaign] {Tag}: couldn't guard {m.DeclaringType?.Name}.{m.Name}: {ex.Message}");
             }
         }
 
         private static bool GuestBlocked(MethodBase original)
         {
             if (!CampaignSync.IsActive || Plugin.Instance.CfgIsHost.Value || CampaignSync.ApplyingFromNetwork) return false;
-            Plugin.Log.LogInfo($"[Campaign] fork: guest tried host-only action {(_hostOnly.TryGetValue(original, out var n) ? n : original.Name)}.");
+            Plugin.Log.LogInfo($"[Campaign] guest tried host-only action {(_hostOnly.TryGetValue(original, out var n) ? n : original.Name)}.");
             SimSyncManager.ReportIssue("Host only.", HostOnlyText, warning: true);
             return true;
         }
@@ -1116,7 +1209,8 @@ namespace SeapowerMultiplayer.Campaign
             if (_tMover!.IsAssignableFrom(t) || t == _tHull || t == _tBaseDef || t == _tPendingFlight || t == _tRoutePoint
                 || t == _tCatalogue || t == _tBuildOrder || t == _tAdmOrder || t == _tAdmOp || t == _tRelief
                 || t == _tStation || t == _tPendingMerge || t == _tSquadron || t == _tGroundUnit
-                || t == _tRefitCount || t == _tVlsTargetCell) return true;
+                || t == _tRefitCount || t == _tVlsTargetCell || t == _tShipFit || t == _tDefenceOffer
+                || (t == _tFrontSupport && t != null)) return true;
             if (IsList(t, out var e))
             {
                 if (e.IsGenericType && e.GetGenericTypeDefinition() == typeof(ValueTuple<,>))
@@ -1164,7 +1258,8 @@ namespace SeapowerMultiplayer.Campaign
             if (t == _tRoutePoint) return EncRoutePoint(v);
             if (t == _tSquadron) return "sq:" + F(v, "Id");
             if (t == _tGroundUnit) return "gu:" + F(v, "Id");
-            if (t == _tRefitCount || t == _tVlsTargetCell)    // plain data: the fork's own JSON
+            if (t == _tFrontSupport) return "fs:" + F(v, "Id");
+            if (t == _tRefitCount || t == _tVlsTargetCell || t == _tShipFit || t == _tDefenceOffer)    // plain data: the fork's own JSON
                 return "j:" + ToJson(v).Replace('\n', ' ').Replace("\u001d", " ").Replace("\u001e", " ");
             if (t == _tBuildOrder) return "bo:" + F(v, "Id");
             if (t == _tAdmOrder) return "ao:" + F(v, "Id");
@@ -1219,6 +1314,7 @@ namespace SeapowerMultiplayer.Campaign
                 case "b": return FindBase(body) ?? throw new KeyNotFoundException("base " + body);
                 case "pf": return FindIn("PendingFlights", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("prepared flight no longer exists");
                 case "sq": return FindIn("Squadrons", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("squadron no longer exists");
+                case "fs": return FindIn("FrontSupports", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("front support no longer exists");
                 case "gu": return FindIn("GroundUnits", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("ground unit no longer exists");
                 case "j": return FromJson(body, nn ?? t);
                 case "bo": return FindIn("BuildOrders", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("build order no longer exists");
@@ -1399,7 +1495,7 @@ namespace SeapowerMultiplayer.Campaign
             }
             catch (Exception ex)
             {
-                if (!_drawWarned) { _drawWarned = true; Plugin.Log.LogWarning($"[Campaign] fork: reading map drawings failed: {ex.Message}"); }
+                if (!_drawWarned) { _drawWarned = true; Plugin.Log.LogWarning($"[Campaign] {Tag}: reading map drawings failed: {ex.Message}"); }
             }
         }
 
@@ -1423,7 +1519,7 @@ namespace SeapowerMultiplayer.Campaign
             }
             catch (Exception ex)
             {
-                if (!_drawWarned) { _drawWarned = true; Plugin.Log.LogWarning($"[Campaign] fork: showing map drawings failed: {ex.Message}"); }
+                if (!_drawWarned) { _drawWarned = true; Plugin.Log.LogWarning($"[Campaign] {Tag}: showing map drawings failed: {ex.Message}"); }
             }
         }
 
@@ -1464,7 +1560,7 @@ namespace SeapowerMultiplayer.Campaign
                 var cmd = new CampaignCommand { Id = FieldSetCommand };
                 cmd.Arg("f", field).Arg("v", v == null ? "null" : ToJson(v));
                 CampaignSync.InterceptLocal(cmd);
-                Plugin.Log.LogInfo($"[Campaign] fork: sent my {field} to the host.");
+                Plugin.Log.LogInfo($"[Campaign] {Tag}: sent my {field} to the host.");
             }
         }
         private object? _baselineState;
@@ -1487,7 +1583,7 @@ namespace SeapowerMultiplayer.Campaign
             catch (Exception ex)
             {
                 reason = "The host couldn't read it.";
-                Plugin.Log.LogWarning($"[Campaign] fork: field.set {field} failed: {ex.Message}");
+                Plugin.Log.LogWarning($"[Campaign] {Tag}: field.set {field} failed: {ex.Message}");
                 return false;
             }
         }

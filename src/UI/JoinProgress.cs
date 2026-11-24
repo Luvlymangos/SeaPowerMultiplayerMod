@@ -128,7 +128,7 @@ namespace SeapowerMultiplayer
                 // Host isn't in a campaign: don't sit on a bar forever - this is also
                 // how an ordinary co-op mission starts.
                 if (_establishedAt > 0 && Time.unscaledTime - _establishedAt > 15f)
-                    return new State { Percent = 100, Text = "Connected. The campaign loads when the host opens Pacific 2027.", Done = true };
+                    return new State { Percent = 100, Text = "Connected. The campaign loads when the host opens a dynamic campaign.", Done = true };
                 return new State { Percent = 55, Text = "Waiting for the host's campaign…" };
             }
             if (adapter.Phase != CampaignPhase.Map && CampaignSync.HostPhase == CampaignPhase.Map)

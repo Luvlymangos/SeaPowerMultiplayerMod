@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2s
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2t
 =========================================================
 
 INSTALL (every player - up to 4)
@@ -6,8 +6,9 @@ INSTALL (every player - up to 4)
   2. Double-click "Install (double-click me).bat".
   3. If it warns about the Workshop copy of Seapower Multiplayer, unsubscribe
      from it in Steam. Everyone must use THIS build.
-  Everyone also needs Pacific 2027 ("Dynamic Campaign Mod (fork)") and
-  Bungalow's "Dynamic Campaign Mod" from the Workshop, same versions.
+  Everyone also needs the campaign mod the host plays, same version:
+  Bungalow's "Dynamic Campaign Mod" and/or "Dynamic Campaign Mod (fork)"
+  (Pacific 2027). The mod matching below fetches them for you.
 
 MATCHING MODS (automatic)
   When the guest joins, the guest's game makes its mods match the host's:
@@ -18,15 +19,17 @@ MATCHING MODS (automatic)
   Turn off: [Mods] MatchHostMods = false (or TurnOffModsHostDoesntHave = false
   to only add what's missing).
 
-PLAY PACIFIC 2027 TOGETHER
-  1. Host: load your Pacific 2027 campaign.
+PLAY A DYNAMIC CAMPAIGN TOGETHER (either mod)
+  1. Host: load your campaign (Bungalow's campaigns or Pacific 2027).
   2. Host: Ctrl+F9 -> Host, invite up to 3 players through Steam (Invite Player).
   3. Guest: accept. The host's campaign loads on your PC automatically
-     (loading screen). If it doesn't: load any Pacific 2027 save, then Ctrl+F6.
+     (loading screen). If it doesn't: open any campaign of the same mod, then Ctrl+F6.
   4. The host's game runs the campaign; the guest's map follows it.
+  - Map drawings, convoy/supply priorities and refit queues are shared too.
+  - The host decides "fight or auto-resolve" when a battle comes up.
 
 COMMANDING
-  - Everything starts SHARED: either player can order any task force/flight.
+  - Everything starts SHARED: anyone can order any task force/flight.
   - Select a task force or flight on the campaign map: a box in the bottom
     left shows who commands it, with a Claim / Release button (Ctrl+F7 does
     the same). A claimed one only its owner can order.
