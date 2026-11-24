@@ -58,6 +58,7 @@ namespace SeapowerMultiplayer.Campaign
                       _tCatalogue, _tBuildOrder, _tAdmOrder, _tAdmOp, _tRelief, _tStation, _tPendingMerge,
                       _tSquadron, _tGroundUnit, _tRefitCount, _tVlsTargetCell;
         private bool _probed, _found;
+        private float _nextProbeAt;
         private string _version = "";
 
         public string AdapterId => "dcm-fork";
@@ -72,10 +73,14 @@ namespace SeapowerMultiplayer.Campaign
         private void Probe()
         {
             if (_probed) return;
-            _probed = true;
+            // Not loaded yet (mod loaders start it late): look again in a while rather
+            // than deciding for the whole session.
+            if (UnityEngine.Time.unscaledTime < _nextProbeAt) return;
+            _nextProbeAt = UnityEngine.Time.unscaledTime + 2f;
             _tSession = T("Game.Session.CampaignSession");
             _tSim     = T("Core.Sim.CampaignSim");
-            if (_tSession == null || _tSim == null) return;   // fork not installed
+            if (_tSession == null || _tSim == null) return;   // fork not (yet) loaded
+            _probed = true;
 
             _tBattle       = T("Game.Battle.BattleSession");
             _tState        = T("Core.State.CampaignState");

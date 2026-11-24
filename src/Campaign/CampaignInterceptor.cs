@@ -124,8 +124,12 @@ namespace SeapowerMultiplayer.Campaign
         {
             foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
             {
-                var t = asm.GetType(fullName, throwOnError: false);
-                if (t != null) return t;
+                try
+                {
+                    var t = asm.GetType(fullName, throwOnError: false);
+                    if (t != null) return t;
+                }
+                catch { /* a half-loaded or dynamic assembly: skip it */ }
             }
             return null;
         }

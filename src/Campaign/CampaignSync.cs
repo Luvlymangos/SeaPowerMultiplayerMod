@@ -164,10 +164,17 @@ namespace SeapowerMultiplayer.Campaign
 
         /// <summary>Lazy: other BepInEx plugins (the campaign mod) may load after us,
         /// so look on first tick rather than in Awake.</summary>
+        private static float _nextResolveAt;
+        private static bool _loggedNone;
+
         private static void ResolveAdapter()
         {
             if (_adapterResolved) return;
-            _adapterResolved = true;
+            // Mod loaders (R.A.T.S. Keel, Anchor Chain) start campaign mods well after
+            // BepInEx plugins - tens of seconds, one per frame - so keep looking until
+            // one turns up instead of deciding once at start-up.
+            if (Time.unscaledTime < _nextResolveAt) return;
+            _nextResolveAt = Time.unscaledTime + 2f;
 
             ICampaignAdapter[] candidates =
             {
@@ -180,6 +187,7 @@ namespace SeapowerMultiplayer.Campaign
                 try
                 {
                     if (!c.IsAvailable) continue;
+                    _adapterResolved = true;
                     _adapter = c;
                     _adapter.StateChanged += OnLocalStateChanged;
                     Plugin.Log.LogInfo($"[Campaign] Using adapter '{c.AdapterId}' (mod version {c.ModVersion})");
@@ -190,7 +198,11 @@ namespace SeapowerMultiplayer.Campaign
                     Plugin.Log.LogError($"[Campaign] Adapter probe failed: {ex}");
                 }
             }
-            Plugin.Log.LogInfo("[Campaign] No supported campaign mod found - campaign sync inert.");
+            if (!_loggedNone)
+            {
+                _loggedNone = true;
+                Plugin.Log.LogInfo("[Campaign] No supported campaign mod loaded yet - will keep checking.");
+            }
         }
 
         // ── Called by adapter interception prefixes (both sides) ─────────────
