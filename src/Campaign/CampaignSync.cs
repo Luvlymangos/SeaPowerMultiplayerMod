@@ -785,6 +785,7 @@ namespace SeapowerMultiplayer.Campaign
                 return;
             }
             if (IsHost) HostTick(); else ClientTick();
+            try { _adapter.Tick(); } catch (Exception ex) { Plugin.Log.LogWarning($"[Campaign] adapter tick: {ex.Message}"); }
             TickHotkeys();
         }
 

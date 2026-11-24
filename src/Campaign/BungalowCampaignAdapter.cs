@@ -178,6 +178,8 @@ namespace SeapowerMultiplayer.Campaign
             //   build.queue, time.speed, turn.end
         }
 
+        public void Tick() { }
+
         public bool TryExecute(CampaignCommand command, out string reason) =>
             CampaignInterceptor.TryExecute(command, out reason);
 

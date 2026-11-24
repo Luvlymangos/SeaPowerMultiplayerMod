@@ -92,6 +92,9 @@ namespace SeapowerMultiplayer.Campaign
         /// path (as if the host had clicked it). Return false + reason to reject.</summary>
         bool TryExecute(CampaignCommand command, out string reason);
 
+        /// <summary>Every frame while campaign sync is active (both sides).</summary>
+        void Tick();
+
         // ── Client side ───────────────────────────────────────────────────────
 
         /// <summary>
@@ -143,6 +146,8 @@ namespace SeapowerMultiplayer.Campaign
         public string? SelectedAssetKey() => null;
         public string? SelectedAssetName() => null;
         public bool IsLoading => false;
+        public void Tick() { }
+
         public bool TryExecute(CampaignCommand command, out string reason)
         {
             reason = "No campaign mod is loaded on the host.";

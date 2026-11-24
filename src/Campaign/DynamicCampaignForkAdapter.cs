@@ -277,7 +277,10 @@ namespace SeapowerMultiplayer.Campaign
             ("Batteries", false), ("Salvos", false), ("Targets", false), ("Strikes", false),
             ("ForkWar", false), ("ForkGarrison", false), ("ForkAdvance", false), ("ForkAdvanceStatus", false),
             ("Disengaged", false), ("PortStockCut", false), ("LandUnitsLost", false), ("ForkLandDamage", false),
-            ("RunwayDamagedUntil", false), ("AlertLines", false), ("Drawings", false), ("Recap", false),
+            ("RunwayDamagedUntil", false), ("AlertLines", false), ("Recap", false),
+            // Player-edited (guests send theirs with field.set) and the refit queues.
+            ("Drawings", true), ("SupplyPriorities", true), ("SupplySources", true),
+            ("NativeAirWingRefitOrders", false), ("NativeVlsRefitOrders", false),
         };
         private readonly Dictionary<string, int> _fieldSent = new();
         private int _deltaCount;
@@ -365,6 +368,7 @@ namespace SeapowerMultiplayer.Campaign
         {
             var state = State;
             if (state == null || Phase != CampaignPhase.Map) return "";
+            SnapshotDrawings(state);
             return full ? CaptureFull(state) : CaptureDelta(state);
         }
 
@@ -741,7 +745,9 @@ namespace SeapowerMultiplayer.Campaign
                         case "fld":
                         {
                             int a = rest.IndexOf(' ');
-                            ApplyField(state, rest.Substring(0, a), rest.Substring(a + 1));
+                            string fname = rest.Substring(0, a);
+                            ApplyField(state, fname, rest.Substring(a + 1));
+                            AfterFieldApplied(state, fname);
                             break;
                         }
                         case "radar":
@@ -961,6 +967,7 @@ namespace SeapowerMultiplayer.Campaign
             ("Core.Sim.CarrierWings", "Wings"),
             ("Core.Sim.Reliefs", "Reliefs"),
             ("Core.Sim.Invasions", "Invasions"),
+            ("Core.Sim.Supply", "Supply"),
         };
 
         /// <summary>Player actions, by class. Everything else in these classes is
@@ -982,6 +989,7 @@ namespace SeapowerMultiplayer.Campaign
             ["Wings"]     = new[] { "Replenish" },
             ["Reliefs"]   = new[] { "Begin", "Stop" },
             ["Invasions"] = new[] { "Embark", "Disembark", "Land" },
+            ["Supply"]    = new[] { "Hold", "Resume", "Reroute", "SetSource" },   // the Convoys panel
         };
 
         private void BindActions()
@@ -1342,8 +1350,148 @@ namespace SeapowerMultiplayer.Campaign
             return true;
         }
 
-        public bool TryExecute(CampaignCommand command, out string reason) =>
-            CampaignInterceptor.TryExecute(command, out reason);
+        public bool TryExecute(CampaignCommand command, out string reason)
+        {
+            if (command.Id == FieldSetCommand) return ExecuteFieldSet(command, out reason);
+            return CampaignInterceptor.TryExecute(command, out reason);
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  PLAYER-EDITED FIELDS: map drawings, supply priorities
+        //
+        //  Neither goes through a method we can forward: drawings live in the game's
+        //  own drawing layer (the fork copies it into state.Drawings only when it
+        //  saves), and the Convoys panel writes SupplyPriorities directly. So each
+        //  machine polls them; a guest sends its edited copy to the host
+        //  (field.set), the host takes it and every guest gets the host's in the
+        //  normal updates ("fld" lines). Last edit wins.
+        // ══════════════════════════════════════════════════════════════════════
+
+        private const string FieldSetCommand = "field.set";
+        private static readonly string[] GuestEditedFields = { "Drawings", "SupplyPriorities" };
+        private readonly Dictionary<string, int> _guestBaseline = new();
+        private float _nextGuestPoll;
+
+        private Type? _tDrawingTools;
+        private FieldInfo? _keptField;
+        private MethodInfo? _snapshotDrawings, _restoreDrawings;
+        private bool _drawWarned;
+
+        private bool ResolveDrawingTools()
+        {
+            _tDrawingTools ??= T("UI.Map.DrawingTools");
+            if (_tDrawingTools == null) return false;
+            _keptField        ??= AccessTools.Field(_tDrawingTools, "_kept");
+            _snapshotDrawings ??= AccessTools.Method(_tDrawingTools, "Snapshot");
+            _restoreDrawings  ??= AccessTools.Method(_tDrawingTools, "Restore");
+            return _keptField != null && _snapshotDrawings != null && _restoreDrawings != null;
+        }
+
+        /// <summary>Copy the live drawing layer into state.Drawings (what the fork's own
+        /// save does). Only when the layer exists - before the map has shown, the
+        /// state's list is the truth and must not be wiped.</summary>
+        private void SnapshotDrawings(object state)
+        {
+            try
+            {
+                if (!ResolveDrawingTools() || _keptField!.GetValue(null) == null) return;
+                _snapshotDrawings!.Invoke(null, new[] { state });
+            }
+            catch (Exception ex)
+            {
+                if (!_drawWarned) { _drawWarned = true; Plugin.Log.LogWarning($"[Campaign] fork: reading map drawings failed: {ex.Message}"); }
+            }
+        }
+
+        /// <summary>Show state.Drawings on the map: rebuild the live layer's graphics
+        /// in place (the map keeps the layer object).</summary>
+        private void RedrawFromState(object state)
+        {
+            try
+            {
+                if (!ResolveDrawingTools()) return;
+                var kept = _keptField!.GetValue(null);
+                if (kept == null) return;   // map not shown yet: it restores from state.Drawings itself
+                var fresh = _restoreDrawings!.Invoke(null, new[] { F(state, "Drawings") });
+                var have = AccessTools.Property(kept.GetType(), "Graphics")?.GetValue(kept) as IList;
+                var want = fresh == null ? null : AccessTools.Property(fresh.GetType(), "Graphics")?.GetValue(fresh) as IList;
+                if (have == null || want == null) return;
+                var items = want.Cast<object>().ToList();
+                want.Clear();
+                have.Clear();
+                foreach (var g in items) have.Add(g);
+            }
+            catch (Exception ex)
+            {
+                if (!_drawWarned) { _drawWarned = true; Plugin.Log.LogWarning($"[Campaign] fork: showing map drawings failed: {ex.Message}"); }
+            }
+        }
+
+        private int FieldHash(object state, string field)
+        {
+            var v = F(state, field);
+            return StableHash(IdRef.Replace(v == null ? "null" : ToJson(v), ""));
+        }
+
+        private void AfterFieldApplied(object state, string field)
+        {
+            if (field == "Drawings") RedrawFromState(state);
+            if (Array.IndexOf(GuestEditedFields, field) >= 0)
+            {
+                if (field == "Drawings") SnapshotDrawings(state);   // what this machine now produces
+                _guestBaseline[field] = FieldHash(state, field);
+            }
+        }
+
+        /// <summary>GUEST, every frame: send what the local player changed.</summary>
+        public void Tick()
+        {
+            if (Plugin.Instance.CfgIsHost.Value || !CampaignSync.IsActive || Phase != CampaignPhase.Map || IsLoading) return;
+            if (UnityEngine.Time.unscaledTime < _nextGuestPoll) return;
+            _nextGuestPoll = UnityEngine.Time.unscaledTime + 1f;
+            var state = State;
+            if (state == null) return;
+            if (!ReferenceEquals(state, _baselineState)) { _guestBaseline.Clear(); _baselineState = state; }
+            SnapshotDrawings(state);
+            foreach (var field in GuestEditedFields)
+            {
+                if (AccessTools.Field(state.GetType(), field) == null) continue;
+                int h = FieldHash(state, field);
+                if (!_guestBaseline.TryGetValue(field, out var old)) { _guestBaseline[field] = h; continue; }  // first look
+                if (h == old) continue;
+                _guestBaseline[field] = h;
+                var v = F(state, field);
+                var cmd = new CampaignCommand { Id = FieldSetCommand };
+                cmd.Arg("f", field).Arg("v", v == null ? "null" : ToJson(v));
+                CampaignSync.InterceptLocal(cmd);
+                Plugin.Log.LogInfo($"[Campaign] fork: sent my {field} to the host.");
+            }
+        }
+        private object? _baselineState;
+
+        private bool ExecuteFieldSet(CampaignCommand c, out string reason)
+        {
+            reason = "";
+            string field = c.Get("f") ?? "";
+            string json  = c.Get("v") ?? "null";
+            if (Array.IndexOf(GuestEditedFields, field) < 0) { reason = $"'{field}' can't be set by a player."; return false; }
+            var state = State;
+            if (state == null) { reason = "No campaign loaded on the host."; return false; }
+            try
+            {
+                ApplyField(state, field, json);
+                if (field == "Drawings") RedrawFromState(state);
+                RaiseStateChanged();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                reason = "The host couldn't read it.";
+                Plugin.Log.LogWarning($"[Campaign] fork: field.set {field} failed: {ex.Message}");
+                return false;
+            }
+        }
+
 
         internal void RaiseStateChanged() => StateChanged?.Invoke();
 
