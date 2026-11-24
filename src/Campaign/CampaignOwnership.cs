@@ -54,6 +54,20 @@ namespace SeapowerMultiplayer.Campaign
             Changed?.Invoke();
         }
 
+        /// <summary>Hand everything one seat holds to another (e.g. guest left).</summary>
+        public static int ReassignAll(CampaignSeat from, CampaignSeat to)
+        {
+            var keys = new List<string>();
+            foreach (var kv in _owners) if (kv.Value == from) keys.Add(kv.Key);
+            foreach (var k in keys)
+            {
+                if (to == CampaignSeat.Shared && _default == CampaignSeat.Shared) _owners.Remove(k);
+                else _owners[k] = to;
+            }
+            if (keys.Count > 0) Changed?.Invoke();
+            return keys.Count;
+        }
+
         public static void SetDefault(CampaignSeat owner)
         {
             if (_default == owner) return;

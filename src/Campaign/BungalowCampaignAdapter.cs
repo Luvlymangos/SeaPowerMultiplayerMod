@@ -98,7 +98,7 @@ namespace SeapowerMultiplayer.Campaign
             if (held) _humanPosts.Add(postKey); else _humanPosts.Remove(postKey);
         }
 
-        public string? PostOfBattleUnit(SeaPower.ObjectBase unit)
+        public string? OwnerKeyOfBattleUnit(SeaPower.ObjectBase unit)
         {
             // TODO(decompile): how does the mod build a battle from campaign forces?
             // Likely it writes a mission ini per fleet/post - match the unit by name,

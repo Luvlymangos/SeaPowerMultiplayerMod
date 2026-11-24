@@ -57,10 +57,11 @@ namespace SeapowerMultiplayer.Campaign
         /// </summary>
         void SetPostHeldByHuman(string postKey, bool held);
 
-        /// <summary>In a campaign battle: which post a friendly battle unit came from
-        /// (null = unknown / not from a post). Used to give each player their own
-        /// post's units when the battle starts; AI posts' units start Shared.</summary>
-        string? PostOfBattleUnit(SeaPower.ObjectBase unit);
+        /// <summary>In a campaign battle: the ownership key of the campaign asset a
+        /// friendly battle unit came from - its Career post, or (no Career) its task
+        /// force / squadron key. Null = unknown. Used to give each player their own
+        /// units when the battle starts.</summary>
+        string? OwnerKeyOfBattleUnit(SeaPower.ObjectBase unit);
 
         /// <summary>Raised (host side) whenever campaign state changed in a way the
         /// guest should see: a command executed, a turn/time step advanced, the enemy
@@ -121,7 +122,7 @@ namespace SeapowerMultiplayer.Campaign
         public System.Collections.Generic.IReadOnlyList<(string key, string name)> ListPosts() =>
             System.Array.Empty<(string, string)>();
         public void SetPostHeldByHuman(string postKey, bool held) { }
-        public string? PostOfBattleUnit(SeaPower.ObjectBase unit) => null;
+        public string? OwnerKeyOfBattleUnit(SeaPower.ObjectBase unit) => null;
         public event Action? StateChanged { add { } remove { } }
 
         public string CaptureState() => "";

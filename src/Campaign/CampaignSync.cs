@@ -47,6 +47,11 @@ namespace SeapowerMultiplayer.Campaign
         /// <summary>Command id a guest sends to take a Career post. Handled by
         /// CampaignSync itself, not by an adapter binding.</summary>
         public const string RequestPostCommand = "career.requestPost";
+
+        /// <summary>Command ids for claiming / releasing a campaign asset (task force,
+        /// squadron) outside Career. AssetKey = the asset. Handled by CampaignSync.</summary>
+        public const string ClaimCommand   = "own.claim";
+        public const string ReleaseCommand = "own.release";
         private static bool  _battleSentThisPhase;
 
         // ── Client state ──────────────────────────────────────────────────────
@@ -149,6 +154,7 @@ namespace SeapowerMultiplayer.Campaign
 
             ICampaignAdapter[] candidates =
             {
+                new DynamicCampaignForkAdapter(),   // Pacific 2027 (first target)
                 new BungalowCampaignAdapter(),
             };
 
@@ -225,6 +231,11 @@ namespace SeapowerMultiplayer.Campaign
             {
                 reply.Accepted = TryGrantPost(msg.Command.AssetKey, out reply.Reason);
             }
+            else if (msg.Command.Id == ClaimCommand || msg.Command.Id == ReleaseCommand)
+            {
+                reply.Accepted = TryClaim(CampaignSeat.Guest, msg.Command.AssetKey,
+                                          msg.Command.Id == ClaimCommand, out reply.Reason);
+            }
             else if (!CampaignOwnership.MayCommand(CampaignSeat.Guest, msg.Command.AssetKey))
             {
                 reply.Reason = $"{msg.Command.AssetKey} is assigned to the host.";
@@ -295,6 +306,51 @@ namespace SeapowerMultiplayer.Campaign
             Plugin.Log.LogInfo($"[Campaign] Career: guest now holds post '{postKey}'" +
                                (previous != null ? $" (released '{previous}')" : ""));
             return true;
+        }
+
+        /// <summary>
+        /// Claim (or release) a campaign asset outside Career. Everything starts
+        /// Shared; a claimed asset only its owner may order. Nobody can claim what
+        /// the partner holds - the partner has to release it first.
+        /// Both seats go through here: the host's own claims call it directly
+        /// (<see cref="ClaimLocal"/>), the guest's arrive as commands.
+        /// </summary>
+        private static bool TryClaim(CampaignSeat who, string assetKey, bool claim, out string reason)
+        {
+            if (string.IsNullOrEmpty(assetKey)) { reason = "Nothing selected."; return false; }
+            var cur = CampaignOwnership.OwnerOf(assetKey);
+            if (claim)
+            {
+                if (cur == who) { reason = ""; return true; }
+                if (cur != CampaignSeat.Shared) { reason = "Your partner commands that. Ask them to release it."; return false; }
+                CampaignOwnership.Assign(assetKey, who);
+            }
+            else
+            {
+                if (cur != who) { reason = "That isn't yours to release."; return false; }
+                CampaignOwnership.Assign(assetKey, CampaignSeat.Shared);
+            }
+            _dirty = true;
+            reason = "";
+            Plugin.Log.LogInfo($"[Campaign] {who} {(claim ? "claimed" : "released")} '{assetKey}'.");
+            return true;
+        }
+
+        /// <summary>Claim/release from the local player (UI). Host: applied at once.
+        /// Guest: sent to the host like any other command.</summary>
+        public static void ClaimLocal(string assetKey, bool claim)
+        {
+            if (!IsActive) return;
+            if (IsHost)
+            {
+                if (!TryClaim(CampaignSeat.Host, assetKey, claim, out var why))
+                    SimSyncManager.ReportIssue("Can't change command.", why, warning: true);
+                return;
+            }
+            var cmd = new CampaignCommand { Id = claim ? ClaimCommand : ReleaseCommand, AssetKey = assetKey };
+            uint seq = _nextSeq++;
+            _pending[seq] = cmd;
+            NetworkManager.Instance.SendToServer(new CampaignCommandMessage { Seq = seq, Command = cmd });
         }
 
         /// <summary>
@@ -433,14 +489,8 @@ namespace SeapowerMultiplayer.Campaign
         /// </summary>
         private static void SeedBattleOwnership()
         {
-            if (!_adapter.IsCareer || !OwnershipRules.LockActive) return;
+            if (!OwnershipRules.LockActive) return;
             if (!CoopPair(out byte guestSlot, out _)) return;
-            string? guestPost = CampaignOwnership.HeldBy(CampaignSeat.Guest);
-            if (guestPost == null)
-            {
-                Plugin.Log.LogInfo("[Campaign] Battle: guest holds no post - host takes everything; send formations to share.");
-                return;
-            }
 
             int assigned = 0;
             var units = UnitRegistry.All;
@@ -450,12 +500,14 @@ namespace SeapowerMultiplayer.Campaign
                 if (u == null || u.UniqueID == 0 || u is WeaponBase) continue;
                 if (!Teams.IsFriendly(u)) continue;
                 if (FormationOwnership.OwnerOf(u.UniqueID) == guestSlot) continue;
-                if (_adapter.PostOfBattleUnit(u) != guestPost) continue;
+                string? key = _adapter.OwnerKeyOfBattleUnit(u);
+                if (key == null || CampaignOwnership.OwnerOf(key) != CampaignSeat.Guest) continue;
                 // Whole formation: formations are what players command and send.
                 FormationOwnership.HostAssignFormationOf(u, guestSlot);
                 assigned++;
             }
-            Plugin.Log.LogInfo($"[Campaign] Battle: gave the guest the formations of post '{guestPost}' ({assigned} anchor unit(s)).");
+            Plugin.Log.LogInfo($"[Campaign] Battle: gave the guest the formations of the assets they command ({assigned} anchor unit(s)); " +
+                               "Shared and host assets start with the host - send formations to share.");
         }
 
         // ── Client: receive ───────────────────────────────────────────────────
@@ -624,7 +676,14 @@ namespace SeapowerMultiplayer.Campaign
         public static void Reset()
         {
             if (_suppressedLocally) Release();
-            if (IsHost)
+            if (IsHost && !_adapter.IsCareer)
+            {
+                // The guest left: what they claimed goes back to Shared, so the host
+                // can order it.
+                int n = CampaignOwnership.ReassignAll(CampaignSeat.Guest, CampaignSeat.Shared);
+                if (n > 0) Plugin.Log.LogInfo($"[Campaign] Guest left - {n} claimed asset(s) back to shared.");
+            }
+            else if (IsHost)
             {
                 // The guest left: their post goes back to the campaign's AI so it is
                 // not left drifting with nobody in command.
