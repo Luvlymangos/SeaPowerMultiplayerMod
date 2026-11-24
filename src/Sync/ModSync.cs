@@ -152,6 +152,16 @@ namespace SeapowerMultiplayer
 
         private static void Apply(Entry[] host)
         {
+            if (RestartNeeded)
+            {
+                // Mods were changed earlier in this game session: the list matches now,
+                // but they only load at start-up. Say so again instead of "matches".
+                Plugin.Log.LogInfo("[ModSync] Mods were changed earlier this session - still waiting for a restart.");
+                SimSyncManager.ReportIssue("Restart Sea Power to load the host's mods.",
+                    "Your mod list was changed to match the host's, but mods only load when the game starts. Quit, start Sea Power again and rejoin.");
+                NetworkManager.Instance.SendToServer(new ModSyncReportMessage { Summary = "changed mods earlier but hasn't restarted yet - their new mods aren't loaded" });
+                return;
+            }
             Plugin.Log.LogInfo($"[ModSync] Host has {host.Length} mods enabled: " +
                                string.Join(", ", host.Select(e => e.WorkshopId != 0 ? $"{e.Name} [{e.WorkshopId}]" : $"{e.Name} [local:{e.Key}]")));
             var before = SettingsMods();
@@ -331,7 +341,8 @@ namespace SeapowerMultiplayer
             _received = 0;
             _requested = false;
             _downloadTotal = 0;
-            RestartNeeded = false;
+            // RestartNeeded is NOT reset: the mods ticked this session still aren't loaded
+            // until the game restarts, however many times the guest reconnects.
             // Downloads already asked of Steam carry on regardless.
             _waitingFor.Clear();
         }
