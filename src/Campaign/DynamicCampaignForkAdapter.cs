@@ -263,6 +263,23 @@ namespace SeapowerMultiplayer.Campaign
             ("Operations", true), ("ReliefStations", true), ("GroundUnits", true), ("Squadrons", false),
         };
         private readonly Dictionary<string, Dictionary<string, int>> _listSent = new();
+
+        /// <summary>Whole fields sent when they change (the fork's own JSON). Fast =
+        /// every update: the top bar (points, renown, rank, bases, victory, income) and
+        /// small things. Slow = every 5th: the bigger panels' data.</summary>
+        private static readonly (string field, bool fast)[] TrackedFields =
+        {
+            ("Points", true), ("Renown", true), ("Ranks", true), ("BaseOwner", true), ("ForkVictory", true),
+            ("IncomeHistory", true), ("IncomePaidThrough", true), ("War", true), ("Outcomes", true),
+            ("Messages", true), ("Victor", true), ("VictoryAt", true), ("WeaponsYear", true),
+            ("Garrisons", false), ("Stocks", false), ("StocksByClass", false), ("WingStores", false),
+            ("AlliedPortStores", false), ("Intel", false), ("Reports", false), ("Log", false),
+            ("Batteries", false), ("Salvos", false), ("Targets", false), ("Strikes", false),
+            ("ForkWar", false), ("ForkGarrison", false), ("ForkAdvance", false), ("ForkAdvanceStatus", false),
+            ("Disengaged", false), ("PortStockCut", false), ("LandUnitsLost", false), ("ForkLandDamage", false),
+            ("RunwayDamagedUntil", false), ("AlertLines", false), ("Drawings", false), ("Recap", false),
+        };
+        private readonly Dictionary<string, int> _fieldSent = new();
         private int _deltaCount;
         private readonly HashSet<object> _feedSent = new(ReferenceEqualityComparer.Instance);
         private string _radarSent = "";
@@ -374,6 +391,12 @@ namespace SeapowerMultiplayer.Campaign
             _feedSent.Clear();
             if (F(state, "Feed") is IList feed) foreach (var x in feed) if (x != null) _feedSent.Add(x);
             _radarSent = RadarOf(state);
+            _fieldSent.Clear();
+            foreach (var (field, _) in TrackedFields)
+            {
+                var v = F(state, field);
+                if (v != null) _fieldSent[field] = StableHash(IdRef.Replace(ToJson(v), ""));
+            }
             _listSent.Clear();
             foreach (var (field, _) in TrackedLists)
             {
@@ -479,6 +502,19 @@ namespace SeapowerMultiplayer.Campaign
                     sb.Append("ldel ").Append(field).Append(' ').Append(string.Join(",", gone)).Append('\n');
                     changes++;
                 }
+            }
+
+            foreach (var (field, fast) in TrackedFields)
+            {
+                if (!fast && !slow) continue;
+                if (AccessTools.Field(state.GetType(), field) == null) continue;   // not in this fork version
+                var v = F(state, field);
+                string json = v == null ? "null" : ToJson(v);
+                int h = StableHash(IdRef.Replace(json, ""));
+                if (_fieldSent.TryGetValue(field, out var old) && old == h) continue;
+                _fieldSent[field] = h;
+                sb.Append("fld ").Append(field).Append(' ').Append(json.Replace('\n', ' ')).Append('\n');
+                changes++;
             }
 
             string radar = RadarOf(state);
@@ -702,6 +738,12 @@ namespace SeapowerMultiplayer.Campaign
                                     if (l[i] != null && del.Contains(IdOf(l[i]!))) l.RemoveAt(i);
                             break;
                         }
+                        case "fld":
+                        {
+                            int a = rest.IndexOf(' ');
+                            ApplyField(state, rest.Substring(0, a), rest.Substring(a + 1));
+                            break;
+                        }
                         case "radar":
                             if (F(state, "RadarContacts") is IList rc)
                             {
@@ -728,6 +770,39 @@ namespace SeapowerMultiplayer.Campaign
                 }
             }
             if (lost) CampaignSync.RequestFull("update referred to something this map doesn't have");
+        }
+
+        /// <summary>Replace a state field with the host's value. Collections are refilled
+        /// in place (other objects may hold the same instance; many are readonly).</summary>
+        private void ApplyField(object state, string name, string json)
+        {
+            var fi = AccessTools.Field(state.GetType(), name);
+            if (fi == null) return;
+            object? incoming = json == "null" ? null : FromJson(json, fi.FieldType);
+            var current = fi.GetValue(state);
+            if (current is IDictionary cd && incoming is IDictionary id)
+            {
+                cd.Clear();
+                foreach (DictionaryEntry e in id) cd[e.Key] = e.Value;
+                return;
+            }
+            if (current is IList cl && incoming is IList il)
+            {
+                cl.Clear();
+                foreach (var x in il) cl.Add(x);
+                return;
+            }
+            if (current != null && incoming != null && current.GetType().IsGenericType
+                && AccessTools.Method(current.GetType(), "Clear") is MethodInfo clear
+                && AccessTools.Method(current.GetType(), "Add") is MethodInfo add
+                && incoming is IEnumerable items)
+            {
+                // HashSet<T> and other non-list collections.
+                clear.Invoke(current, null);
+                foreach (var x in items) add.Invoke(current, new[] { x });
+                return;
+            }
+            fi.SetValue(state, incoming);
         }
 
         private void ApplyMotion(object mover, string motion)

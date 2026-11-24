@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2n
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2o
 =========================================================
 
 INSTALL (both players)
@@ -38,8 +38,9 @@ COMMANDING
     refits, invasions. Things the guest creates appear at once on their screen
     and are confirmed by the host's game a second later.
   - Ctrl+F6 (guest): reload the host's campaign if your map looks wrong.
-  - Fuel, stocks and intel on the guest's map refresh after each battle
-    (or Ctrl+F6); positions and routes update every second.
+  - Positions, routes, points, renown, rank and bases update every second;
+    stocks, intel, reports, garrisons and the front every 5 seconds. Ship
+    fuel refreshes after each battle (or Ctrl+F6).
 
 SEEING EACH OTHER
   - Your partner's mouse shows on your map (campaign globe and battle map)
