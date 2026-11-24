@@ -873,11 +873,8 @@ namespace SeapowerMultiplayer.UI
 
             _claimKey = key;
             var owner = Campaign.CampaignOwnership.OwnerOf(key);
-            var me = Plugin.Instance.CfgIsHost.Value ? Campaign.CampaignSeat.Host : Campaign.CampaignSeat.Guest;
-            string partner = "your partner";
-            var all = PlayerRegistry.All;
-            for (int i = 0; i < all.Count; i++)
-                if (all[i] != null && all[i].Connected && all[i].Slot != PlayerRegistry.LocalSlot) { partner = all[i].DisplayName; break; }
+            var me = Campaign.Seats.Local;
+            string partner = Campaign.Seats.NameOf(owner);
 
             ClaimTitle = Campaign.CampaignSync.Adapter.SelectedAssetName() ?? key;
             ClaimStatusBrush = SeatBrush(owner);
@@ -888,7 +885,7 @@ namespace SeapowerMultiplayer.UI
             }
             else if (owner == Campaign.CampaignSeat.Shared)
             {
-                ClaimStatus = "Shared - either of you can order it"; ClaimButtonText = "Claim (Ctrl+F7)";
+                ClaimStatus = "Shared - anyone can order it"; ClaimButtonText = "Claim (Ctrl+F7)";
                 ClaimButtonEnabled = true; _claimWants = true;
             }
             else
@@ -1124,7 +1121,7 @@ namespace SeapowerMultiplayer.UI
             {
                 // Fork: on the campaign map the campaign is shared by itself - there is
                 // no mission to start or deploy.
-                text = isHost ? "Campaign shared - your partner sees your map"
+                text = isHost ? "Campaign shared with your players"
                      : Campaign.CampaignSync.AppliedAny ? "In the host's campaign"
                      : "Waiting for the host's campaign...";
                 brush = isHost || Campaign.CampaignSync.AppliedAny ? Ok : Warn;

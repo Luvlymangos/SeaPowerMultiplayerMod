@@ -880,7 +880,8 @@ namespace SeapowerMultiplayer.Campaign
         // ── Owner colours ─────────────────────────────────────────────────────
 
         private readonly Dictionary<object, Noesis.Brush> _origBrush = new(ReferenceEqualityComparer.Instance);
-        private Noesis.SolidColorBrush? _hostBrush, _guestBrush;
+        private readonly Dictionary<CampaignSeat, Noesis.SolidColorBrush> _seatBrush = new();
+        private bool IsSeatBrush(Noesis.Brush? b) { foreach (var v in _seatBrush.Values) if (ReferenceEquals(v, b)) return true; return false; }
         private float _colorErrorAt = -999f;
 
         private static void MirrorSyncPostfix(object __instance)
@@ -905,26 +906,26 @@ namespace SeapowerMultiplayer.Campaign
         {
             if (F(mirror, "_groups") is not IDictionary groups) return;
             bool on = CampaignSync.IsActive;
-            _hostBrush  ??= BrushOf(CampaignOwnership.SeatColor(CampaignSeat.Host));
-            _guestBrush ??= BrushOf(CampaignOwnership.SeatColor(CampaignSeat.Guest));
+            if (_seatBrush.Count == 0)
+                foreach (var seat in new[] { CampaignSeat.Host, CampaignSeat.Guest, CampaignSeat.Guest2, CampaignSeat.Guest3 })
+                    _seatBrush[seat] = BrushOf(CampaignOwnership.SeatColor(seat));
 
             foreach (DictionaryEntry e in groups)
             {
                 if (e.Value is not GroupOfUnits g || e.Key == null) continue;
                 var owner = on ? CampaignOwnership.OwnerOf(KeyOf(e.Key, _tTaskForce!)) : CampaignSeat.Shared;
-                Noesis.SolidColorBrush? want = owner == CampaignSeat.Host ? _hostBrush
-                                             : owner == CampaignSeat.Guest ? _guestBrush : null;
+                _seatBrush.TryGetValue(owner, out var want);
                 var cur = g.UnitColorBrush;
                 if (want != null)
                 {
                     if (ReferenceEquals(cur, want)) continue;
                     // Remember the fork's colour (the latest one, if it changed it).
-                    if (!ReferenceEquals(cur, _hostBrush) && !ReferenceEquals(cur, _guestBrush)) _origBrush[g] = cur;
+                    if (!IsSeatBrush(cur)) _origBrush[g] = cur;
                     g.UnitColorBrush = want;
                 }
                 else if (_origBrush.TryGetValue(g, out var orig))
                 {
-                    if (ReferenceEquals(cur, _hostBrush) || ReferenceEquals(cur, _guestBrush)) g.UnitColorBrush = orig;
+                    if (IsSeatBrush(cur)) g.UnitColorBrush = orig;
                     _origBrush.Remove(g);
                 }
             }

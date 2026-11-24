@@ -13,6 +13,47 @@ namespace SeapowerMultiplayer.Campaign
         Guest  = 2,
         /// <summary>Nobody (e.g. AI-controlled allied forces in Career mode).</summary>
         Locked = 3,
+        Guest2 = 4,   // slot 2
+        Guest3 = 5,   // slot 3
+    }
+
+    /// <summary>Player slot &lt;-&gt; campaign seat. Slot 0 is the host.</summary>
+    public static class Seats
+    {
+        public const int MaxPlayers = 4;
+
+        public static CampaignSeat OfSlot(byte slot) => slot switch
+        {
+            0 => CampaignSeat.Host,
+            1 => CampaignSeat.Guest,
+            2 => CampaignSeat.Guest2,
+            3 => CampaignSeat.Guest3,
+            _ => CampaignSeat.Locked,
+        };
+
+        /// <summary>The player slot of a player seat, or null for Shared/Locked.</summary>
+        public static byte? SlotOf(CampaignSeat seat) => seat switch
+        {
+            CampaignSeat.Host   => 0,
+            CampaignSeat.Guest  => 1,
+            CampaignSeat.Guest2 => 2,
+            CampaignSeat.Guest3 => 3,
+            _ => null,
+        };
+
+        public static bool IsPlayer(CampaignSeat seat) => SlotOf(seat) != null;
+
+        public static CampaignSeat Local => OfSlot(SeapowerMultiplayer.PlayerRegistry.LocalSlot);
+
+        /// <summary>"you", or the player's name, or "another player" if they left.</summary>
+        public static string NameOf(CampaignSeat seat)
+        {
+            var slot = SlotOf(seat);
+            if (slot == null) return seat == CampaignSeat.Locked ? "the AI" : "everyone";
+            if (slot == SeapowerMultiplayer.PlayerRegistry.LocalSlot) return "you";
+            string n = SeapowerMultiplayer.PlayerRegistry.DisplayName(slot.Value);
+            return string.IsNullOrEmpty(n) ? "another player" : n;
+        }
     }
 
     /// <summary>Battle transition stages the host announces to the guest.</summary>

@@ -115,49 +115,56 @@ namespace SeapowerMultiplayer.Campaign
         private static bool IsHost => Plugin.Instance.CfgIsHost.Value;
 
         /// <summary>Campaign sync is live: enabled, co-op, handshake done, mod present,
-        /// and exactly two players on the same side.</summary>
+        /// and 2-4 players on the same side.</summary>
         public static bool IsActive =>
             Plugin.Instance.CfgCampaignSync.Value
             && !Plugin.Instance.CfgPvP.Value
             && NetworkManager.Instance.IsEstablished
             && _adapter.IsAvailable
-            && CoopPair(out _, out _);
+            && CoopGroup(out _);
 
         private static bool _pairWarned;
 
         /// <summary>
-        /// The campaign layer is built for one host + one guest on the same side. The
-        /// battle layer upstream supports up to 8 players and teams; the campaign
-        /// layer's Host/Guest seats do not (yet), so anything else keeps it inert and
-        /// says why, rather than half-working.
+        /// The campaign layer supports the host plus up to three guests, all on the
+        /// same side (Seats.MaxPlayers). Anything else keeps it inert and says why,
+        /// rather than half-working.
         /// </summary>
-        public static bool CoopPair(out byte guestSlot, out string why)
+        public static bool CoopGroup(out string why)
         {
-            guestSlot = PlayerRegistry.NoSender;
-            int others = 0;
-            Team? hostTeam = null, guestTeam = null;
+            int n = 0, others = 0;
+            Team? hostTeam = null;
+            bool split = false;
             var all = PlayerRegistry.All;
             for (int i = 0; i < all.Count; i++)
             {
                 var p = all[i];
                 if (p == null || !p.Connected) continue;
+                n++;
                 if (p.Slot == 0) { hostTeam = p.Team; continue; }
                 others++;
-                guestSlot = p.Slot;
-                guestTeam = p.Team;
+                if (p.Slot >= Seats.MaxPlayers) { why = $"Co-op campaign supports up to {Seats.MaxPlayers} players."; return false; }
             }
-            if (others != 1)
+            for (int i = 0; i < all.Count; i++)
             {
-                why = $"Co-op campaign supports exactly two players for now ({others + 1} connected).";
-                return false;
+                var p = all[i];
+                if (p != null && p.Connected && p.Slot != 0 && hostTeam != null && p.Team != hostTeam) split = true;
             }
-            if (hostTeam != null && guestTeam != null && hostTeam != guestTeam)
-            {
-                why = "Both players must be on the same side for a co-op campaign.";
-                return false;
-            }
+            if (others < 1) { why = "Waiting for another player."; return false; }
+            if (n > Seats.MaxPlayers) { why = $"Co-op campaign supports up to {Seats.MaxPlayers} players ({n} connected)."; return false; }
+            if (split) { why = "Everyone must be on the same side for a co-op campaign."; return false; }
             why = "";
             return true;
+        }
+
+        /// <summary>Connected guest slots (not the host).</summary>
+        private static List<byte> GuestSlots()
+        {
+            var r = new List<byte>();
+            var all = PlayerRegistry.All;
+            for (int i = 0; i < all.Count; i++)
+                if (all[i] != null && all[i].Connected && all[i].Slot != 0) r.Add(all[i].Slot);
+            return r;
         }
 
         // ── Adapter resolution ────────────────────────────────────────────────
@@ -224,17 +231,17 @@ namespace SeapowerMultiplayer.Campaign
                 if (!CampaignOwnership.MayCommand(CampaignSeat.Host, command.AssetKey))
                 {
                     Telemetry.Count("campaign.hostRefusedOwnership");
-                    SimSyncManager.ReportIssue("That belongs to your partner.",
-                        $"{command.AssetKey} is assigned to the other player.", warning: true);
+                    SimSyncManager.ReportIssue($"That belongs to {Seats.NameOf(CampaignOwnership.OwnerOf(command.AssetKey))}.",
+                        "Ask them to release it.", warning: true);
                     return false;
                 }
                 return true;
             }
 
-            if (!CampaignOwnership.MayCommand(CampaignSeat.Guest, command.AssetKey))
+            if (!CampaignOwnership.MayCommand(Seats.Local, command.AssetKey))
             {
-                SimSyncManager.ReportIssue("That belongs to the host.",
-                    $"{command.AssetKey} is assigned to the other player.", warning: true);
+                SimSyncManager.ReportIssue($"That belongs to {Seats.NameOf(CampaignOwnership.OwnerOf(command.AssetKey))}.",
+                    "Ask them to release it.", warning: true);
                 return false;
             }
 
@@ -251,7 +258,8 @@ namespace SeapowerMultiplayer.Campaign
         internal static void HandleCommand(byte fromSlot, CampaignCommandMessage msg)
         {
             if (!IsHost) return;
-            // Two-player only (CoopPair): the one guest is the Guest seat.
+            var seat = Seats.OfSlot(fromSlot);
+            string who = PlayerRegistry.DisplayName(fromSlot);
             var reply = new CampaignCommandResultMessage { Seq = msg.Seq };
 
             if (!IsActive)
@@ -260,16 +268,16 @@ namespace SeapowerMultiplayer.Campaign
             }
             else if (msg.Command.Id == RequestPostCommand)
             {
-                reply.Accepted = TryGrantPost(msg.Command.AssetKey, out reply.Reason);
+                reply.Accepted = TryGrantPost(seat, msg.Command.AssetKey, out reply.Reason);
             }
             else if (msg.Command.Id == ClaimCommand || msg.Command.Id == ReleaseCommand)
             {
-                reply.Accepted = TryClaim(CampaignSeat.Guest, msg.Command.AssetKey,
+                reply.Accepted = TryClaim(seat, msg.Command.AssetKey,
                                           msg.Command.Id == ClaimCommand, out reply.Reason);
             }
-            else if (!CampaignOwnership.MayCommand(CampaignSeat.Guest, msg.Command.AssetKey))
+            else if (!CampaignOwnership.MayCommand(seat, msg.Command.AssetKey))
             {
-                reply.Reason = $"{msg.Command.AssetKey} is assigned to the host.";
+                reply.Reason = $"That belongs to {PlayerRegistry.DisplayName(Seats.SlotOf(CampaignOwnership.OwnerOf(msg.Command.AssetKey)) ?? 0)}.";
             }
             else
             {
@@ -295,15 +303,21 @@ namespace SeapowerMultiplayer.Campaign
                 }
             }
 
-            Plugin.Log.LogInfo($"[Campaign] <- guest #{msg.Seq}: {msg.Command} => {(reply.Accepted ? "OK" : "REFUSED: " + reply.Reason)}");
+            Plugin.Log.LogInfo($"[Campaign] <- {who} #{msg.Seq}: {msg.Command} => {(reply.Accepted ? "OK" : "REFUSED: " + reply.Reason)}");
             Telemetry.Count(reply.Accepted ? "campaign.cmdAccepted" : "campaign.cmdRefused");
-            NetworkManager.Instance.BroadcastToClients(reply);
+            // Only to the sender: each guest numbers its own commands.
+            NetworkManager.Instance.SendToSlot(fromSlot, reply);
         }
 
-        internal static void HandleResyncRequest(CampaignResyncRequestMessage msg)
+        /// <summary>Guests waiting for a complete copy. Only they get it; everyone
+        /// else stays on deltas, so one player joining doesn't reload the others' map.</summary>
+        private static readonly HashSet<byte> _fullFor = new();
+
+        internal static void HandleResyncRequest(byte fromSlot, CampaignResyncRequestMessage msg)
         {
             if (!IsHost) return;
-            Plugin.Log.LogInfo($"[Campaign] Guest requested resync (has r{msg.HaveRevision}): {msg.Reason}");
+            Plugin.Log.LogInfo($"[Campaign] {PlayerRegistry.DisplayName(fromSlot)} requested resync (has r{msg.HaveRevision}): {msg.Reason}");
+            _fullFor.Add(fromSlot);
             _lastSentHash = 0;  // force a send even if unchanged
             _dirty = true;
             _fullRequested = true;
@@ -314,7 +328,7 @@ namespace SeapowerMultiplayer.Campaign
         /// HOST, Career: hand a free post to the guest. A post is free when no human
         /// holds it. The guest's previous post (if any) goes back to the AI.
         /// </summary>
-        private static bool TryGrantPost(string postKey, out string reason)
+        private static bool TryGrantPost(CampaignSeat seat, string postKey, out string reason)
         {
             if (!_adapter.IsCareer) { reason = "The host's campaign is not in Career mode."; return false; }
             bool exists = false;
@@ -322,20 +336,20 @@ namespace SeapowerMultiplayer.Campaign
             if (!exists) { reason = $"No post '{postKey}' in this campaign."; return false; }
 
             var owner = CampaignOwnership.OwnerOf(postKey);
-            if (owner == CampaignSeat.Host) { reason = "The host holds that post."; return false; }
-            if (owner == CampaignSeat.Guest) { reason = ""; return true; }
+            if (owner == seat) { reason = ""; return true; }
+            if (Seats.IsPlayer(owner)) { reason = $"{Seats.NameOf(owner)} holds that post."; return false; }
 
-            string? previous = CampaignOwnership.HeldBy(CampaignSeat.Guest);
+            string? previous = CampaignOwnership.HeldBy(seat);
             if (previous != null)
             {
                 CampaignOwnership.Assign(previous, CampaignSeat.Locked);
                 _adapter.SetPostHeldByHuman(previous, false);
             }
-            CampaignOwnership.Assign(postKey, CampaignSeat.Guest);
+            CampaignOwnership.Assign(postKey, seat);
             _adapter.SetPostHeldByHuman(postKey, true);
             _dirty = true;
             reason = "";
-            Plugin.Log.LogInfo($"[Campaign] Career: guest now holds post '{postKey}'" +
+            Plugin.Log.LogInfo($"[Campaign] Career: {seat} now holds post '{postKey}'" +
                                (previous != null ? $" (released '{previous}')" : ""));
             return true;
         }
@@ -354,7 +368,7 @@ namespace SeapowerMultiplayer.Campaign
             if (claim)
             {
                 if (cur == who) { reason = ""; return true; }
-                if (cur != CampaignSeat.Shared) { reason = "Your partner commands that. Ask them to release it."; return false; }
+                if (cur != CampaignSeat.Shared) { reason = $"{Seats.NameOf(cur)} commands that. Ask them to release it."; return false; }
                 CampaignOwnership.Assign(assetKey, who);
             }
             else
@@ -424,6 +438,7 @@ namespace SeapowerMultiplayer.Campaign
 
             TickBattleBridge();
 
+            if (_fullFor.Count == 0) _fullRequested = false;
             if (!_dirty && !_fullRequested) return;
             // Continuous clock: while it runs, nearly every frame changes something,
             // so StateChanged is effectively always set and this interval IS the
@@ -433,8 +448,34 @@ namespace SeapowerMultiplayer.Campaign
             _lastSnapshotAt = Time.unscaledTime;
 
             bool full = _fullRequested;
+            if (full)
+            {
+                // Bring the guests that are already in sync up to this instant with a
+                // delta first: the full copy resets what the host thinks was sent, so
+                // anything since their last delta would otherwise never reach them.
+                var targets = new List<byte>(_fullFor);
+                var others = GuestSlots().FindAll(g => !_fullFor.Contains(g));
+                if (others.Count > 0)
+                {
+                    string delta;
+                    try { delta = _adapter.CaptureState(false) ?? ""; }
+                    catch (Exception ex) { Plugin.Log.LogError($"[Campaign] CaptureState threw: {ex}"); return; }
+                    if (delta.Length > 0) SendSnapshot(delta, _adapter.Phase, others);
+                }
+                string fullState;
+                try { fullState = _adapter.CaptureState(true) ?? ""; }
+                catch (Exception ex) { Plugin.Log.LogError($"[Campaign] CaptureState threw: {ex}"); return; }
+                if (fullState.Length == 0) return;
+                _fullRequested = false;
+                _fullFor.Clear();
+                _lastFullAt = Time.unscaledTime;
+                _lastSentHash = StableHash(fullState);
+                SendSnapshot(fullState, _adapter.Phase, targets);
+                return;
+            }
+
             string state;
-            try { state = _adapter.CaptureState(full) ?? ""; }
+            try { state = _adapter.CaptureState(false) ?? ""; }
             catch (Exception ex)
             {
                 Plugin.Log.LogError($"[Campaign] CaptureState threw: {ex}");
@@ -442,15 +483,15 @@ namespace SeapowerMultiplayer.Campaign
             }
 
             if (state.Length == 0) return;      // adapter: nothing to send (or not ready)
-            if (full) { _fullRequested = false; _lastFullAt = Time.unscaledTime; }
             int hash = StableHash(state);
-            if (!full && hash == _lastSentHash) return;  // nothing the guest can see changed
+            if (hash == _lastSentHash) return;  // nothing the guests can see changed
             _lastSentHash = hash;
 
-            SendSnapshot(state, _adapter.Phase);
+            SendSnapshot(state, _adapter.Phase, null);
         }
 
-        private static void SendSnapshot(string state, CampaignPhase phase)
+        /// <param name="to">null = every guest.</param>
+        private static void SendSnapshot(string state, CampaignPhase phase, List<byte>? to)
         {
             byte[] packed = Gzip(state);
             int chunkCount = Mathf.Max(1, Mathf.CeilToInt(packed.Length / (float)ChunkBudgetBytes));
@@ -467,7 +508,7 @@ namespace SeapowerMultiplayer.Campaign
                 int len = Mathf.Min(ChunkBudgetBytes, packed.Length - off);
                 var part = new byte[len];
                 Buffer.BlockCopy(packed, off, part, 0, len);
-                NetworkManager.Instance.BroadcastToClients(new CampaignSnapshotChunkMessage
+                var chunk = new CampaignSnapshotChunkMessage
                 {
                     Revision   = rev,
                     ChunkIdx   = (ushort)i,
@@ -478,9 +519,12 @@ namespace SeapowerMultiplayer.Campaign
                     HostClock     = _adapter.Clock,
                     HostTimeScale = _adapter.TimeScale,
                     Payload    = part,
-                });
+                };
+                if (to == null) NetworkManager.Instance.BroadcastToClients(chunk);
+                else foreach (var slot in to) NetworkManager.Instance.SendToSlot(slot, chunk);
             }
-            Plugin.Log.LogInfo($"[Campaign] Snapshot r{rev} sent: {state.Length} ch -> {packed.Length} B in {chunkCount} chunks, phase={phase}");
+            Plugin.Log.LogInfo($"[Campaign] Snapshot r{rev} sent{(to == null ? "" : " to " + string.Join(", ", to.ConvertAll(PlayerRegistry.DisplayName)))}: " +
+                               $"{state.Length} ch -> {packed.Length} B in {chunkCount} chunks, phase={phase}");
             Telemetry.Count("campaign.snapshotSent");
         }
 
@@ -546,23 +590,28 @@ namespace SeapowerMultiplayer.Campaign
         private static void SeedBattleOwnership()
         {
             if (!OwnershipRules.LockActive) return;
-            if (!CoopPair(out byte guestSlot, out _)) return;
+            var guests = GuestSlots();
+            if (guests.Count == 0) return;
 
-            int assigned = 0;
+            var given = new Dictionary<byte, int>();
             var units = UnitRegistry.All;
             for (int i = 0; i < units.Count; i++)
             {
                 var u = units[i];
                 if (u == null || u.UniqueID == 0 || u is WeaponBase) continue;
                 if (!Teams.IsFriendly(u)) continue;
-                if (FormationOwnership.OwnerOf(u.UniqueID) == guestSlot) continue;
                 string? key = _adapter.OwnerKeyOfBattleUnit(u);
-                if (key == null || CampaignOwnership.OwnerOf(key) != CampaignSeat.Guest) continue;
+                if (key == null) continue;
+                var slot = Seats.SlotOf(CampaignOwnership.OwnerOf(key));
+                if (slot == null || slot == 0 || !guests.Contains(slot.Value)) continue;
+                if (FormationOwnership.OwnerOf(u.UniqueID) == slot.Value) continue;
                 // Whole formation: formations are what players command and send.
-                FormationOwnership.HostAssignFormationOf(u, guestSlot);
-                assigned++;
+                FormationOwnership.HostAssignFormationOf(u, slot.Value);
+                given[slot.Value] = (given.TryGetValue(slot.Value, out var c) ? c : 0) + 1;
             }
-            Plugin.Log.LogInfo($"[Campaign] Battle: gave the guest the formations of the assets they command ({assigned} anchor unit(s)); " +
+            var parts = new List<string>();
+            foreach (var g in guests) parts.Add($"{PlayerRegistry.DisplayName(g)} {(given.TryGetValue(g, out var c) ? c : 0)}");
+            Plugin.Log.LogInfo($"[Campaign] Battle: gave each player the formations of the assets they claimed ({string.Join(", ", parts)} anchor unit(s)); " +
                                "Shared and host assets start with the host - send formations to share.");
         }
 
@@ -725,7 +774,7 @@ namespace SeapowerMultiplayer.Campaign
             ResolveAdapter();
             if (!_pairWarned && _adapter.IsAvailable && Plugin.Instance.CfgCampaignSync.Value
                 && !Plugin.Instance.CfgPvP.Value && NetworkManager.Instance.IsEstablished
-                && !CoopPair(out _, out var why))
+                && !CoopGroup(out var why))
             {
                 _pairWarned = true;
                 SimSyncManager.ReportIssue("Co-op campaign is off for this session.", why, warning: true);
@@ -752,7 +801,7 @@ namespace SeapowerMultiplayer.Campaign
                     return;
                 }
                 var owner = CampaignOwnership.OwnerOf(key);
-                var me = IsHost ? CampaignSeat.Host : CampaignSeat.Guest;
+                var me = Seats.Local;
                 ClaimLocal(key, claim: owner != me);
             }
             else if (!IsHost && Plugin.Instance.CfgCampaignKeyResync.Value.IsDown())
@@ -768,29 +817,42 @@ namespace SeapowerMultiplayer.Campaign
             Plugin.Log.LogInfo("[Campaign] Guest campaign logic released.");
         }
 
+        /// <summary>HOST: one player left while others remain.</summary>
+        public static void PlayerLeft(byte slot)
+        {
+            if (!IsHost || slot == 0) return;
+            FreeSeat(slot);
+            _fullFor.Remove(slot);
+        }
+
+        /// <summary>What a departed player commanded goes back: claims to Shared (so the
+        /// others can order them), a Career post to the campaign's AI.</summary>
+        private static void FreeSeat(byte slot)
+        {
+            var seat = Seats.OfSlot(slot);
+            if (!_adapter.IsCareer)
+            {
+                int n = CampaignOwnership.ReassignAll(seat, CampaignSeat.Shared);
+                if (n > 0) Plugin.Log.LogInfo($"[Campaign] {seat} left - {n} claimed asset(s) back to shared.");
+            }
+            else
+            {
+                string? post = CampaignOwnership.HeldBy(seat);
+                if (post != null)
+                {
+                    CampaignOwnership.Assign(post, CampaignSeat.Locked);
+                    _adapter.SetPostHeldByHuman(post, false);
+                    Plugin.Log.LogInfo($"[Campaign] {seat} left - post '{post}' returned to the AI.");
+                }
+            }
+        }
+
         /// <summary>NetworkManager.OnPeerDisconnected.</summary>
         public static void Reset()
         {
             if (_suppressedLocally) Release();
-            if (IsHost && !_adapter.IsCareer)
-            {
-                // The guest left: what they claimed goes back to Shared, so the host
-                // can order it.
-                int n = CampaignOwnership.ReassignAll(CampaignSeat.Guest, CampaignSeat.Shared);
-                if (n > 0) Plugin.Log.LogInfo($"[Campaign] Guest left - {n} claimed asset(s) back to shared.");
-            }
-            else if (IsHost)
-            {
-                // The guest left: their post goes back to the campaign's AI so it is
-                // not left drifting with nobody in command.
-                string? guestPost = CampaignOwnership.HeldBy(CampaignSeat.Guest);
-                if (guestPost != null)
-                {
-                    CampaignOwnership.Assign(guestPost, CampaignSeat.Locked);
-                    _adapter.SetPostHeldByHuman(guestPost, false);
-                    Plugin.Log.LogInfo($"[Campaign] Guest left - post '{guestPost}' returned to the AI.");
-                }
-            }
+            if (IsHost) for (byte s = 1; s < Seats.MaxPlayers; s++) FreeSeat(s);
+            _fullFor.Clear();
             _dirty = false;
             _ownershipDirty = true;  // re-send to the next guest
             _lastSentHash = 0;

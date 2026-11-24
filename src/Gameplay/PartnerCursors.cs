@@ -187,6 +187,8 @@ namespace SeapowerMultiplayer
             GUI.color = old;
         }
 
+        public static void Forget(byte slot) => _remotes.Remove(slot);
+
         public static void Reset()
         {
             _remotes.Clear();

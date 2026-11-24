@@ -1,12 +1,12 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2q
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2r
 =========================================================
 
-INSTALL (both players)
+INSTALL (every player - up to 4)
   1. Unzip this whole folder anywhere.
   2. Double-click "Install (double-click me).bat".
   3. If it warns about the Workshop copy of Seapower Multiplayer, unsubscribe
-     from it in Steam. Both players must use THIS build.
-  Both players also need Pacific 2027 ("Dynamic Campaign Mod (fork)") and
+     from it in Steam. Everyone must use THIS build.
+  Everyone also needs Pacific 2027 ("Dynamic Campaign Mod (fork)") and
   Bungalow's "Dynamic Campaign Mod" from the Workshop, same versions.
 
 MATCHING MODS (automatic)
@@ -20,7 +20,7 @@ MATCHING MODS (automatic)
 
 PLAY PACIFIC 2027 TOGETHER
   1. Host: load your Pacific 2027 campaign.
-  2. Host: Ctrl+F9 -> Host, invite your partner through Steam.
+  2. Host: Ctrl+F9 -> Host, invite up to 3 players through Steam (Invite Player).
   3. Guest: accept. The host's campaign loads on your PC automatically
      (loading screen). If it doesn't: load any Pacific 2027 save, then Ctrl+F6.
   4. The host's game runs the campaign; the guest's map follows it.
@@ -30,10 +30,10 @@ COMMANDING
   - Select a task force or flight on the campaign map: a box in the bottom
     left shows who commands it, with a Claim / Release button (Ctrl+F7 does
     the same). A claimed one only its owner can order.
-  - Claimed units are coloured on both maps: host's amber, guest's cyan
+  - Claimed units are coloured on both maps: host amber, then cyan, green and pink for players 2-4
     (the same colours as your mouse cursors).
   - Guest orders go to the host's game; you'll see them a second later.
-  - Both players can do everything: move fleets, missions, prepare and
+  - Everyone can do everything: move fleets, missions, prepare and
     launch flights, form/split task forces, shipyard and Admiralty orders,
     refits, invasions. Things the guest creates appear at once on their screen
     and are confirmed by the host's game a second later.
@@ -43,7 +43,7 @@ COMMANDING
     fuel refreshes after each battle (or Ctrl+F6).
 
 SEEING EACH OTHER
-  - Your partner's mouse shows on your map (campaign globe and battle map)
+  - Everyone else's mouse shows on your map (campaign globe and battle map)
     as a coloured marker with their Steam name. Turn it off in the config:
     [Campaign] PartnerCursors = false.
 
@@ -54,5 +54,5 @@ BATTLES
   - After the battle the guest is brought back to the campaign map.
 
 IF SOMETHING BREAKS
-  Send BepInEx\LogOutput.log from BOTH PCs (in the Sea Power folder),
+  Send BepInEx\LogOutput.log from EVERY PC (in the Sea Power folder),
   plus a line on what you were doing.

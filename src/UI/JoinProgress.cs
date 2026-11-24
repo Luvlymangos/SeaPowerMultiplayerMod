@@ -178,6 +178,8 @@ namespace SeapowerMultiplayer
 
         // ── Host: hear about guests ───────────────────────────────────────────
 
+        public static void Forget(byte slot) => _remotes.Remove(slot);
+
         internal static void OnReport(byte slot, JoinProgressMessage msg)
         {
             if (!Plugin.Instance.CfgIsHost.Value) return;

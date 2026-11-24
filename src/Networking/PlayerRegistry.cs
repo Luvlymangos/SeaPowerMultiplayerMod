@@ -46,7 +46,7 @@ namespace SeapowerMultiplayer
     /// </summary>
     public static class PlayerRegistry
     {
-        public const int MaxPlayers = 8;
+        public const int MaxPlayers = 4;   // co-op campaign fork: host + 3 (Campaign.Seats.MaxPlayers)
 
         private static readonly PlayerInfo?[] _slots = new PlayerInfo?[MaxPlayers];
         private static readonly List<PlayerInfo> _dense = new();

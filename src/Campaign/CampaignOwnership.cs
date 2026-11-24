@@ -28,8 +28,10 @@ namespace SeapowerMultiplayer.Campaign
         /// player's map cursor (slot 0 = host amber, slot 1 = guest cyan).</summary>
         public static UnityEngine.Color SeatColor(CampaignSeat seat) => seat switch
         {
-            CampaignSeat.Host  => new UnityEngine.Color(1.00f, 0.75f, 0.10f),
-            CampaignSeat.Guest => new UnityEngine.Color(0.25f, 0.85f, 1.00f),
+            CampaignSeat.Host   => new UnityEngine.Color(1.00f, 0.75f, 0.10f),   // amber
+            CampaignSeat.Guest  => new UnityEngine.Color(0.25f, 0.85f, 1.00f),   // cyan
+            CampaignSeat.Guest2 => new UnityEngine.Color(0.55f, 1.00f, 0.35f),   // green
+            CampaignSeat.Guest3 => new UnityEngine.Color(1.00f, 0.45f, 0.85f),   // pink
             _                  => new UnityEngine.Color(0.85f, 0.85f, 0.85f),
         };
 

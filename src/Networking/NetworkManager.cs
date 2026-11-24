@@ -720,6 +720,9 @@ namespace SeapowerMultiplayer
                 // losing everything.
                 if (_isHost && _peers.Count > 0)
                 {
+                    Campaign.CampaignSync.PlayerLeft(slot);
+                    PartnerCursors.Forget(slot);
+                    JoinProgress.Forget(slot);
                     PlayerRegistry.HostBroadcastRoster();
                     ReconnectManager.OnPeerLost(wasEstablished, peersRemain: true);
                     return;
@@ -1190,7 +1193,8 @@ namespace SeapowerMultiplayer
                 case MessageType.CampaignResyncRequest:
                 {
                     var msg = CampaignResyncRequestMessage.Deserialize(reader);
-                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleResyncRequest(msg));
+                    byte rslot = SlotOf(from);
+                    _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleResyncRequest(rslot, msg));
                     break;
                 }
 
