@@ -1373,7 +1373,10 @@ namespace SeapowerMultiplayer
             {
                 Telemetry.Count("handshake.modMismatch");
                 Log.LogWarning($"[Mods] {modWarning}");
-                VersionMismatchNotice = modWarning;
+                // Fork: with mod matching on, ModSync is already fixing this (and says
+                // what it changed), so the generic "your mods don't match" popup would
+                // only get in the way while the guest downloads.
+                if (!Plugin.Instance.CfgModSync.Value) VersionMismatchNotice = modWarning;
             }
             Log.LogInfo($"[Handshake] {seated.DisplayName} accepted as slot {seated.Slot} on {seated.Team} " +
                         $"(plugin {msg.PluginVersion}, protocol {msg.ProtocolVersion}, game {ProtocolInfo.GameVersion}). Established.");
@@ -1429,7 +1432,10 @@ namespace SeapowerMultiplayer
             {
                 Telemetry.Count("handshake.modMismatch");
                 Log.LogWarning($"[Mods] {modWarning}");
-                VersionMismatchNotice = modWarning;
+                // Fork: with mod matching on, ModSync is already fixing this (and says
+                // what it changed), so the generic "your mods don't match" popup would
+                // only get in the way while the guest downloads.
+                if (!Plugin.Instance.CfgModSync.Value) VersionMismatchNotice = modWarning;
             }
             // Before the session load starts, which is the point - the guest allocates
             // ids all the way through a load, so a floor armed afterwards is too late.
