@@ -15,6 +15,15 @@ namespace SeapowerMultiplayer.Campaign
         Locked = 3,
     }
 
+    /// <summary>Battle transition stages the host announces to the guest.</summary>
+    public enum BattleStage : byte
+    {
+        None      = 0,
+        Starting  = 1,  // the campaign chose a battle; the host is loading it
+        Sending   = 2,  // the host's battle is live and on its way to the guest
+        Returning = 3,  // battle over; the host is going back to the campaign map
+    }
+
     /// <summary>What the host's campaign is doing right now.</summary>
     public enum CampaignPhase : byte
     {

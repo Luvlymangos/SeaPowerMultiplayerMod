@@ -30,6 +30,13 @@ namespace SeapowerMultiplayer
         private static float _localDoneAt = -1f;
         private static float _lastReport;
         private static bool _wasJoining;
+        private static bool _joinDone;
+
+        // Battle transition (announced by the host)
+        private static BattleStage _battle;
+        private static string _battleWhere = "";
+        private static bool _sawLoad;          // a scene load/receive happened since the notice
+        private static float _battleAt;
         private static float _establishedAt = -1f;
 
         private sealed class Remote { public float Percent; public string Text = ""; public float Seen; public bool Done; public float DoneAt = -1f; }
@@ -39,8 +46,59 @@ namespace SeapowerMultiplayer
 
         // ── Guest: compute ────────────────────────────────────────────────────
 
+        internal static void OnBattleNotice(BattleNoticeMessage msg)
+        {
+            if (Plugin.Instance.CfgIsHost.Value) return;
+            var stage = (BattleStage)msg.Stage;
+            if (stage == BattleStage.Starting || _battle == BattleStage.None || stage == BattleStage.Returning) _sawLoad = false;
+            _battle = stage;
+            if (msg.Where.Length > 0) _battleWhere = msg.Where;
+            if (stage == BattleStage.Returning) _battleWhere = "";
+            _battleAt = Time.unscaledTime;
+            _localActive = true;
+            _localDoneAt = -1f;
+        }
+
+        /// <summary>After joining: battle start/return and campaign reloads.</summary>
+        private static State ComputeTransition()
+        {
+            var adapter = CampaignSync.Adapter;
+            if (SessionManager.SceneLoading || SessionManager.IsReceiving) _sawLoad = true;
+            string where = _battleWhere.Length > 0 ? " " + _battleWhere : "";
+
+            if (_battle == BattleStage.Starting || _battle == BattleStage.Sending)
+            {
+                if (SessionManager.SceneLoading) return new State { Percent = -1, Text = "Loading the battle…" };
+                if (SessionManager.IsReceiving)  return new State { Percent = 80, Text = "Battle received - setting it up…" };
+                if (_sawLoad && SessionManager.MissionIsLive)
+                {
+                    _battle = BattleStage.None;
+                    return new State { Percent = 100, Text = "Battle ready.", Done = true };
+                }
+                if (_battle == BattleStage.Sending) return new State { Percent = 60, Text = "The host is sending you the battle…" };
+                // Host is loading: no progress to report from here, so time it gently.
+                float t = Mathf.Clamp01((Time.unscaledTime - _battleAt) / 60f);
+                return new State { Percent = 5 + 50 * t, Text = $"Battle starting{where} - the host is loading it…" };
+            }
+
+            var (got, of) = CampaignSync.Receiving;
+            if (of > 0) return new State { Percent = 30 + 50f * got / of, Text = $"Receiving the campaign ({got * 100 / of}%)…" };
+            if (adapter.IsLoading) return new State { Percent = -1, Text = "Loading the campaign map…" };
+            if (_battle == BattleStage.Returning)
+            {
+                if (adapter.Phase == CampaignPhase.Map && Time.unscaledTime - _battleAt > 2f)
+                {
+                    _battle = BattleStage.None;
+                    return new State { Percent = 100, Text = "Back on the campaign map.", Done = true };
+                }
+                return new State { Percent = 15, Text = "Battle over - the host is returning to the campaign…" };
+            }
+            return new State { Percent = 100, Text = "", Done = true };
+        }
+
         private static State Compute()
         {
+            if (_joinDone) return ComputeTransition();
             var nm = NetworkManager.Instance;
             if (nm.IsJoining && !nm.IsConnected) return new State { Percent = -1, Text = "Connecting to the host…" };
             if (nm.IsJoining)                     return new State { Percent = 10, Text = "Connected - checking versions…" };
@@ -91,12 +149,15 @@ namespace SeapowerMultiplayer
             if (isGuest && (nm.IsJoining || nm.IsEstablished))
             {
                 if (!_wasJoining) { _wasJoining = true; _localActive = true; _localDoneAt = -1f; }
-                if (_localActive)
+                if (_localActive || (_joinDone && (_battle != BattleStage.None || CampaignSync.Receiving.total > 0 || CampaignSync.Adapter.IsLoading)))
                 {
+                    if (!_localActive) { _localActive = true; _localDoneAt = -1f; }
                     _local = Compute();
+                    if (_local.Done && !_joinDone) _joinDone = true;
                     if (_local.Done && _localDoneAt < 0) _localDoneAt = Time.unscaledTime;
                     if (!_local.Done) _localDoneAt = -1f;
-                    bool keep = !_local.Done || ModSync.RestartNeeded || Time.unscaledTime - _localDoneAt < HideAfterDone;
+                    bool keep = !_local.Done || ModSync.RestartNeeded
+                                || (_local.Text.Length > 0 && Time.unscaledTime - _localDoneAt < HideAfterDone);
 
                     if (nm.IsEstablished && Time.unscaledTime - _lastReport > 0.5f)
                     {
@@ -110,6 +171,8 @@ namespace SeapowerMultiplayer
             {
                 _wasJoining = false;
                 _localActive = false;
+                _joinDone = false;
+                _battle = BattleStage.None;
             }
         }
 
@@ -131,6 +194,8 @@ namespace SeapowerMultiplayer
             _remotes.Clear();
             _wasJoining = false;
             _localActive = false;
+            _joinDone = false;
+            _battle = BattleStage.None;
         }
 
         // ── Draw ──────────────────────────────────────────────────────────────
@@ -149,13 +214,15 @@ namespace SeapowerMultiplayer
         private void OnGUI()
         {
             var rows = new List<(string title, State s)>();
-            if (_localActive) rows.Add(("Joining the host", _local));
+            if (_localActive && _local.Text.Length > 0)
+                rows.Add((!_joinDone ? "Joining the host" : _battle == BattleStage.Returning || CampaignSync.Adapter.IsLoading
+                          ? "Campaign" : "Battle", _local));
             foreach (var kv in _remotes)
             {
                 var r = kv.Value;
                 if (Time.unscaledTime - r.Seen > 10f) continue;                       // stopped reporting
                 if (r.Done && Time.unscaledTime - r.DoneAt > HideAfterDone) continue;
-                rows.Add(($"{PlayerRegistry.DisplayName(kv.Key)} is joining", new State { Percent = r.Percent, Text = r.Text, Done = r.Done }));
+                rows.Add(($"{PlayerRegistry.DisplayName(kv.Key)}", new State { Percent = r.Percent, Text = r.Text, Done = r.Done }));
             }
             if (rows.Count == 0) return;
 
@@ -233,6 +300,27 @@ namespace SeapowerMultiplayer.Messages
             Percent = r.GetFloat(),
             Text = r.GetString(),
             Done = r.GetBool(),
+        };
+    }
+
+    /// <summary>Host → guest: what the campaign is doing with a battle.</summary>
+    public class BattleNoticeMessage : INetMessage
+    {
+        public byte   Stage;          // Campaign.BattleStage
+        public string Where = "";
+
+        public MessageType Type => MessageType.BattleNotice;
+
+        public void Serialize(NetDataWriter w)
+        {
+            w.Put(Stage);
+            w.Put(Where.Length > 150 ? Where.Substring(0, 150) : Where);
+        }
+
+        public static BattleNoticeMessage Deserialize(NetDataReader r) => new()
+        {
+            Stage = r.GetByte(),
+            Where = r.GetString(),
         };
     }
 }

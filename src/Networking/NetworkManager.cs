@@ -1209,6 +1209,13 @@ namespace SeapowerMultiplayer
                     break;
                 }
 
+                case MessageType.BattleNotice:
+                {
+                    var msg = BattleNoticeMessage.Deserialize(reader);
+                    _mainThreadQueue.Enqueue(() => JoinProgress.OnBattleNotice(msg));
+                    break;
+                }
+
                 case MessageType.JoinProgress:
                 {
                     var msg = JoinProgressMessage.Deserialize(reader);

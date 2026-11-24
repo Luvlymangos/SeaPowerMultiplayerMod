@@ -856,6 +856,12 @@ namespace SeapowerMultiplayer.Campaign
                 prefix:  new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPrefix)),
                 postfix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPostfix)));
 
+            // The campaign has decided on a battle: Saves.BeforeBattle(where, now) runs
+            // before the host starts loading it. Tell the guest straight away.
+            var before = AccessTools.Method(T("Game.Session.Saves"), "BeforeBattle");
+            if (before != null)
+                H.Patch(before, prefix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(BeforeBattlePrefix)));
+
             // Owner colours on the map: after the fork sets each symbol's colour.
             var sync = AccessTools.Method(_tMirror, "Sync");
             if (sync != null)
@@ -922,6 +928,12 @@ namespace SeapowerMultiplayer.Campaign
                     _origBrush.Remove(g);
                 }
             }
+        }
+
+        private static void BeforeBattlePrefix(string where)
+        {
+            try { CampaignSync.NotifyBattle(BattleStage.Starting, where ?? ""); }
+            catch { /* never break the fork's battle start */ }
         }
 
         private static void RunPostfix()

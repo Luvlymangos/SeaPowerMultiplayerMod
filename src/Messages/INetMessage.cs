@@ -57,6 +57,7 @@ namespace SeapowerMultiplayer.Messages
         ModListEntry             = 51,  // host → client: one of the host's enabled mods (fork: mod matching)
         ModSyncReport            = 52,  // client → host: what the guest changed to match
         JoinProgress             = 53,  // client → host: how far the guest has got joining
+        BattleNotice             = 54,  // host → client: the campaign is starting / sending / leaving a battle
     }
 
     public interface INetMessage

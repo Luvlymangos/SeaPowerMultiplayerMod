@@ -486,6 +486,18 @@ namespace SeapowerMultiplayer.Campaign
 
         private static bool CampaignOwnershipChangedSinceSend() => _ownershipDirty;
 
+        private static float _lastStartNoticeAt = -999f;
+
+        /// <summary>HOST: tell the guest what the campaign is doing with a battle, so
+        /// their screen isn't silently frozen while the host loads one.</summary>
+        public static void NotifyBattle(BattleStage stage, string where = "")
+        {
+            if (!IsHost || !IsActive) return;
+            if (stage == BattleStage.Starting) _lastStartNoticeAt = Time.unscaledTime;
+            Plugin.Log.LogInfo($"[Campaign] Telling the guest: battle {stage} {where}");
+            NetworkManager.Instance.BroadcastToClients(new BattleNoticeMessage { Stage = (byte)stage, Where = where ?? "" });
+        }
+
         /// <summary>
         /// When the campaign generates a battle and it finishes loading on the host,
         /// push it to the guest through the normal session path, once per battle.
@@ -495,6 +507,7 @@ namespace SeapowerMultiplayer.Campaign
             var phase = _adapter.Phase;
             if (phase != _hostLastPhase)
             {
+                var prev = _hostLastPhase;
                 Plugin.Log.LogInfo($"[Campaign] Host phase {_hostLastPhase} -> {phase}");
                 _hostLastPhase = phase;
                 _battleSentThisPhase = false;
@@ -502,6 +515,10 @@ namespace SeapowerMultiplayer.Campaign
                 // Back on the map (campaign loaded, or a battle's result absorbed):
                 // the guest gets a complete copy, not a delta.
                 if (phase == CampaignPhase.Map) _fullRequested = true;
+                if (phase == CampaignPhase.Map && prev == CampaignPhase.Battle) NotifyBattle(BattleStage.Returning);
+                // The adapter normally announces the battle earlier (as soon as the
+                // campaign decides on one); this is the fallback.
+                if (phase == CampaignPhase.Battle && Time.unscaledTime - _lastStartNoticeAt > 60f) NotifyBattle(BattleStage.Starting);
             }
 
             if (phase != CampaignPhase.Battle || _battleSentThisPhase) return;
@@ -510,6 +527,7 @@ namespace SeapowerMultiplayer.Campaign
 
             _battleSentThisPhase = true;
             SeedBattleOwnership();
+            NotifyBattle(BattleStage.Sending);
             Plugin.Log.LogInfo("[Campaign] Campaign battle is live - sending it to the guest.");
             SessionManager.CaptureAndSend();
         }
