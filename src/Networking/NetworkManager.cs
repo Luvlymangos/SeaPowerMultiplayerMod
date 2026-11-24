@@ -754,6 +754,7 @@ namespace SeapowerMultiplayer
                 SensorStateManager.Reset();
                 JamStateManager.Reset();
                 Campaign.CampaignSync.Reset();
+                PartnerCursors.Reset();
                 UnitStatusManager.Reset();
                 OrderRefusalNotice.Reset();
                 AttackDesignationSync.Reset();
@@ -1186,6 +1187,14 @@ namespace SeapowerMultiplayer
                 {
                     var msg = CampaignResyncRequestMessage.Deserialize(reader);
                     _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleResyncRequest(msg));
+                    break;
+                }
+
+                case MessageType.PartnerCursor:
+                {
+                    var msg = PartnerCursorMessage.Deserialize(reader);
+                    if (_isHost) msg.Slot = SlotOf(from);   // never trust the claimed slot
+                    _mainThreadQueue.Enqueue(() => PartnerCursors.OnReceived(msg));
                     break;
                 }
 

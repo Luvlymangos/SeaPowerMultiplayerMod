@@ -70,9 +70,17 @@ namespace SeapowerMultiplayer.Campaign
 
         // ── Host side ─────────────────────────────────────────────────────────
 
-        /// <summary>Serialize the whole campaign state the guest's map needs.
-        /// Prefer the mod's own save format - it is already complete and tested.</summary>
-        string CaptureState();
+        /// <summary>
+        /// Serialize what the guest's map needs. <paramref name="full"/> = a complete
+        /// copy (join, after a battle, resync); otherwise only what changed since the
+        /// last capture. The adapter tracks what it last sent; a full capture resets that.
+        /// Return "" when there is nothing to send.
+        /// </summary>
+        string CaptureState(bool full);
+
+        /// <summary>Ownership key of what is selected on the local campaign map
+        /// (for the claim hotkey), or null.</summary>
+        string? SelectedAssetKey();
 
         /// <summary>Run a command the guest asked for, through the mod's own code
         /// path (as if the host had clicked it). Return false + reason to reject.</summary>
@@ -125,7 +133,8 @@ namespace SeapowerMultiplayer.Campaign
         public string? OwnerKeyOfBattleUnit(SeaPower.ObjectBase unit) => null;
         public event Action? StateChanged { add { } remove { } }
 
-        public string CaptureState() => "";
+        public string CaptureState(bool full) => "";
+        public string? SelectedAssetKey() => null;
         public bool TryExecute(CampaignCommand command, out string reason)
         {
             reason = "No campaign mod is loaded on the host.";

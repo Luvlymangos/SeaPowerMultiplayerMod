@@ -43,6 +43,8 @@ namespace SeapowerMultiplayer.Campaign
         private static bool  _ownershipDirty = true;
         private static CampaignPhase _hostLastPhase = CampaignPhase.None;
         private static bool  _careerConfigured;
+        private static bool  _fullRequested = true;
+        private static float _lastFullAt = -999f;
 
         /// <summary>Command id a guest sends to take a Career post. Handled by
         /// CampaignSync itself, not by an adapter binding.</summary>
@@ -94,6 +96,12 @@ namespace SeapowerMultiplayer.Campaign
         private static IDisposable Applying() { _applyingDepth++; return _scope; }
 
         public static ICampaignAdapter Adapter => _adapter;
+
+        /// <summary>Set by the adapter while the HOST's campaign simulation is stepping.
+        /// The simulation calls some of the same methods players do (a flight sent home
+        /// at bingo fuel); ownership is a rule for players, never for the simulation.
+        /// Reset every frame in case a step threw.</summary>
+        public static bool SimStepping;
 
         private static bool IsHost => Plugin.Instance.CfgIsHost.Value;
 
@@ -189,6 +197,8 @@ namespace SeapowerMultiplayer.Campaign
             if (!IsActive) return true;
             if (IsHost)
             {
+                // The host's simulation (or anything off the map) is never refused.
+                if (SimStepping || _adapter.Phase != CampaignPhase.Map) return true;
                 // Host acting locally: respect the guest's assets, then let it run.
                 if (!CampaignOwnership.MayCommand(CampaignSeat.Host, command.AssetKey))
                 {
@@ -275,6 +285,7 @@ namespace SeapowerMultiplayer.Campaign
             Plugin.Log.LogInfo($"[Campaign] Guest requested resync (has r{msg.HaveRevision}): {msg.Reason}");
             _lastSentHash = 0;  // force a send even if unchanged
             _dirty = true;
+            _fullRequested = true;
             _ownershipDirty = true;
         }
 
@@ -392,7 +403,7 @@ namespace SeapowerMultiplayer.Campaign
 
             TickBattleBridge();
 
-            if (!_dirty) return;
+            if (!_dirty && !_fullRequested) return;
             // Continuous clock: while it runs, nearly every frame changes something,
             // so StateChanged is effectively always set and this interval IS the
             // snapshot rate. The guest's presentation-only movement fills the gaps.
@@ -400,16 +411,19 @@ namespace SeapowerMultiplayer.Campaign
             _dirty = false;
             _lastSnapshotAt = Time.unscaledTime;
 
+            bool full = _fullRequested;
             string state;
-            try { state = _adapter.CaptureState() ?? ""; }
+            try { state = _adapter.CaptureState(full) ?? ""; }
             catch (Exception ex)
             {
                 Plugin.Log.LogError($"[Campaign] CaptureState threw: {ex}");
                 return;
             }
 
+            if (state.Length == 0) return;      // adapter: nothing to send (or not ready)
+            if (full) { _fullRequested = false; _lastFullAt = Time.unscaledTime; }
             int hash = StableHash(state);
-            if (hash == _lastSentHash) return;  // nothing the guest can see changed
+            if (!full && hash == _lastSentHash) return;  // nothing the guest can see changed
             _lastSentHash = hash;
 
             SendSnapshot(state, _adapter.Phase);
@@ -464,6 +478,9 @@ namespace SeapowerMultiplayer.Campaign
                 _hostLastPhase = phase;
                 _battleSentThisPhase = false;
                 _dirty = true;  // guest needs to know the phase changed
+                // Back on the map (campaign loaded, or a battle's result absorbed):
+                // the guest gets a complete copy, not a delta.
+                if (phase == CampaignPhase.Map) _fullRequested = true;
             }
 
             if (phase != CampaignPhase.Battle || _battleSentThisPhase) return;
@@ -538,7 +555,14 @@ namespace SeapowerMultiplayer.Campaign
 
             if (msg.Revision != _asmRevision)
             {
-                // Newer revision supersedes whatever was half-built.
+                // Newer revision supersedes whatever was half-built. Updates are
+                // deltas, so a lost one means the map may be missing something:
+                // ask for a complete copy.
+                if (_asmChunks.Length > 0 && _asmReceived < _asmChunks.Length)
+                {
+                    _resyncRequested = false;
+                    RequestResync($"r{_asmRevision} superseded before it completed");
+                }
                 _asmRevision  = msg.Revision;
                 _asmChunks    = new byte[]?[msg.ChunkCount];
                 _asmReceived  = 0;
@@ -628,6 +652,15 @@ namespace SeapowerMultiplayer.Campaign
             }
         }
 
+        /// <summary>Guest: ask the host for a complete copy (adapter found it can't
+        /// apply a delta, or the player pressed the resync key).</summary>
+        public static void RequestFull(string reason)
+        {
+            if (IsHost || !IsActive) return;
+            _resyncRequested = false;
+            RequestResync(reason);
+        }
+
         private static void RequestResync(string reason)
         {
             if (_resyncRequested) return;
@@ -649,6 +682,7 @@ namespace SeapowerMultiplayer.Campaign
         /// <summary>Plugin.Update, every frame.</summary>
         public static void Tick()
         {
+            SimStepping = false;
             ResolveAdapter();
             if (!_pairWarned && _adapter.IsAvailable && Plugin.Instance.CfgCampaignSync.Value
                 && !Plugin.Instance.CfgPvP.Value && NetworkManager.Instance.IsEstablished
@@ -663,6 +697,29 @@ namespace SeapowerMultiplayer.Campaign
                 return;
             }
             if (IsHost) HostTick(); else ClientTick();
+            TickHotkeys();
+        }
+
+        private static void TickHotkeys()
+        {
+            if (_adapter.Phase != CampaignPhase.Map) return;
+            if (Plugin.Instance.CfgCampaignKeyClaim.Value.IsDown())
+            {
+                string? key = _adapter.SelectedAssetKey();
+                if (key == null)
+                {
+                    SimSyncManager.ReportIssue("Select a task force or flight first.",
+                        "Then press the claim key again to claim or release it.", warning: true);
+                    return;
+                }
+                var owner = CampaignOwnership.OwnerOf(key);
+                var me = IsHost ? CampaignSeat.Host : CampaignSeat.Guest;
+                ClaimLocal(key, claim: owner != me);
+            }
+            else if (!IsHost && Plugin.Instance.CfgCampaignKeyResync.Value.IsDown())
+            {
+                RequestFull("player pressed resync");
+            }
         }
 
         private static void Release()

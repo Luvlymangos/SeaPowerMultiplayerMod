@@ -108,7 +108,9 @@ namespace SeapowerMultiplayer.Campaign
 
         // ── 2. State ── TODO(decompile) ──────────────────────────────────────
 
-        public string CaptureState()
+        public string? SelectedAssetKey() => null;   // TODO(decompile)
+
+        public string CaptureState(bool full)
         {
             // TODO(decompile): call the mod's save serializer into a string
             // (or save to a temp file and read it back - SessionManager does this

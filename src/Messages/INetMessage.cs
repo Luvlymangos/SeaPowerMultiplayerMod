@@ -53,6 +53,7 @@ namespace SeapowerMultiplayer.Messages
         CampaignSnapshotChunk    = 47,  // host → client: one gzipped chunk of the campaign state
         CampaignResyncRequest    = 48,  // client → host: send me a full campaign snapshot
         CampaignOwnership        = 49,  // host → client: who holds which campaign post / asset
+        PartnerCursor            = 50,  // both ways (host relays): a teammate's mouse position on the map
     }
 
     public interface INetMessage

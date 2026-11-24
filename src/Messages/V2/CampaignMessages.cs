@@ -192,4 +192,34 @@ namespace SeapowerMultiplayer.Messages
             return msg;
         }
     }
+
+    /// <summary>A player's mouse on the map (campaign globe or battle map), as a
+    /// lat/lon so it lands on the same spot whatever each player's zoom and pan.
+    /// Unreliable: only the latest one matters.</summary>
+    public class PartnerCursorMessage : INetMessage
+    {
+        public byte   Slot;
+        /// <summary>0 = off the map (hide), 1 = campaign map, 2 = battle map.</summary>
+        public byte   Context;
+        public double Lat;
+        public double Lon;
+
+        public MessageType Type => MessageType.PartnerCursor;
+
+        public void Serialize(NetDataWriter writer)
+        {
+            writer.Put(Slot);
+            writer.Put(Context);
+            writer.Put(Lat);
+            writer.Put(Lon);
+        }
+
+        public static PartnerCursorMessage Deserialize(NetDataReader reader) => new()
+        {
+            Slot    = reader.GetByte(),
+            Context = reader.GetByte(),
+            Lat     = reader.GetDouble(),
+            Lon     = reader.GetDouble(),
+        };
+    }
 }

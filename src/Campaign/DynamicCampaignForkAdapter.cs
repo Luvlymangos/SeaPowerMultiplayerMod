@@ -1,81 +1,140 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Reflection;
+using System.Text;
+using System.Text.RegularExpressions;
 using HarmonyLib;
 using SeaPower;
+using SeapowerUI;
+using SeapowerUI.ViewModels;
 
 namespace SeapowerMultiplayer.Campaign
 {
     /// <summary>
     /// Adapter for "Dynamic Campaign Mod (fork)" - Pacific 2027 - Steam Workshop
     /// 3820272150, DynamicCampaignMod.Fork.dll, namespace DynamicCampaignModFork.
-    /// A standalone fork of Bungalow's mod (based on its 0.8.x line), written by
-    /// another author with Bungalow's permission.
+    /// A standalone fork of Bungalow's mod (its 0.8.x line), by another author with
+    /// Bungalow's permission. All names below are verified against fork 0.25.0.
     ///
-    /// No Career mode: one player normally commands the whole side. Co-op splits it
-    /// by CLAIMING task forces and squadrons (CampaignSync.ClaimLocal); everything
-    /// starts Shared. Ownership keys: "tf:{Id}" for task forces, "sq:{Id}" for
-    /// squadrons.
+    /// Everything is reflection: the fork is not referenced at compile time, so the
+    /// multiplayer mod still loads (and this adapter stays inert) without it.
     ///
-    /// Everything here is reflection: the fork is not referenced at compile time,
-    /// so the multiplayer mod still loads (and this adapter stays inert) for players
-    /// who don't have it.
+    /// HOW THE CAMPAIGN IS SHARED
+    ///   - Host runs the campaign. On the guest, CampaignSim.Run (the one method that
+    ///     advances the campaign) is skipped, so its AI/movement/economy never run.
+    ///   - Full copy (join, after a battle, Ctrl+F6): the fork's own save format,
+    ///     CampaignSave.Write on the host -> CampaignSave.Read + CampaignSession.Load
+    ///     on the guest (shows the fork's loading screen).
+    ///   - Every update interval: a text delta. Task forces and flights: position,
+    ///     speed and route for those that moved; whole objects (the fork's own JSON)
+    ///     for ones that appeared or changed make-up; ids of ones that are gone. Plus
+    ///     the clock, radar contacts and new message-feed entries. MapMirror redraws
+    ///     from the state every frame, so nothing else is needed for the map.
+    ///   - Fuel, stocks, intel, economy etc. are refreshed by full copies only.
     ///
-    /// STATUS (phase 1): every name below is verified against fork 0.25.0's IL.
-    /// <see cref="Ready"/> keeps the adapter unavailable until phase 2 (state
-    /// capture/apply) is implemented and tested - until then CampaignSync stays
-    /// inert, exactly as in test build 1.
+    /// PLAYER ACTIONS
+    ///   Orders / Missions / BaseStrikes / AirOperations methods the UI calls are
+    ///   patched. On the guest the call is encoded (ids, coordinates) and sent to
+    ///   the host, which runs the same method through the fork's own code. Actions
+    ///   whose arguments can't be encoded, or that hand back a new object the UI
+    ///   needs at once, are host-only for now (refused on the guest with a message).
+    ///
+    /// OWNERSHIP: keys "tf:{id}" (task force) and "fl:{id}" (flight). Everything is
+    /// Shared until claimed (Ctrl+F7 on the selected one).
     /// </summary>
     public sealed class DynamicCampaignForkAdapter : ICampaignAdapter
     {
-        /// <summary>Flip to true once CaptureState/ApplyState work (phase 2).</summary>
-        private const bool Ready = false;
+        private const string Ns = "DynamicCampaignModFork.";
 
-        // ── Verified type and member names (fork 0.25.0) ─────────────────────
-        private const string NsRoot           = "DynamicCampaignModFork.";
-        private const string TCampaignSession = NsRoot + "Game.Session.CampaignSession"; // static: Active, Sim, Mirror, UI, Load(def, state, ...), LeaveForBattle(bool)
-        private const string TBattleSession   = NsRoot + "Game.Battle.BattleSession";    // static: Active, Plan (BattlePlan)
-        private const string TCampaignSim     = NsRoot + "Core.Sim.CampaignSim";         // State, Orders, Battles, AI; int Run(double seconds); Advance(DateTime)
-        private const string TCampaignState   = NsRoot + "Core.State.CampaignState";     // Now (DateTime), TaskForces, Squadrons, Victor ...
-        private const string TOrders          = NsRoot + "Core.Sim.Orders";              // player orders, each returns an error string or null
-
-        private Type? _session, _battle, _sim;
+        // ── Types ─────────────────────────────────────────────────────────────
+        private Type? _tSession, _tBattle, _tSim, _tState, _tSave, _tHeader, _tDefinition,
+                      _tMover, _tTaskForce, _tFlight, _tHull, _tGeo, _tRoutePoint,
+                      _tBaseDef, _tPendingFlight, _tMirror;
         private bool _probed, _found;
         private string _version = "";
 
         public string AdapterId => "dcm-fork";
-
-        public bool IsAvailable { get { Probe(); return Ready && _found; } }
-
+        public bool IsAvailable { get { Probe(); return _found; } }
         public string ModVersion { get { Probe(); return _version; } }
-
         public event Action? StateChanged;
+
+        private static DynamicCampaignForkAdapter? _instance;
+
+        private Type? T(string name) => CampaignInterceptor.FindType(Ns + name);
 
         private void Probe()
         {
             if (_probed) return;
             _probed = true;
-            _session = CampaignInterceptor.FindType(TCampaignSession);
-            _battle  = CampaignInterceptor.FindType(TBattleSession);
-            _sim     = CampaignInterceptor.FindType(TCampaignSim);
-            if (_session == null || _sim == null) return;   // fork not installed
+            _tSession = T("Game.Session.CampaignSession");
+            _tSim     = T("Core.Sim.CampaignSim");
+            if (_tSession == null || _tSim == null) return;   // fork not installed
 
-            var asm = _session.Assembly;
+            _tBattle       = T("Game.Battle.BattleSession");
+            _tState        = T("Core.State.CampaignState");
+            _tSave         = T("Core.State.CampaignSave");
+            _tHeader       = _tSave?.GetNestedType("Header", BindingFlags.Public | BindingFlags.NonPublic);
+            _tDefinition   = T("Core.Data.CampaignDefinition");
+            _tMover        = T("Core.State.Mover");
+            _tTaskForce    = T("Core.State.TaskForce");
+            _tFlight       = T("Core.State.Flight");
+            _tHull         = T("Core.State.Hull");
+            _tGeo          = T("Core.Geo.GeoPoint");
+            _tRoutePoint   = T("Core.State.RoutePoint");
+            _tBaseDef      = T("Core.Data.BaseDefinition");
+            _tPendingFlight= T("Core.State.PendingFlight");
+            _tMirror       = T("Game.Mirror.MapMirror");
+
+            var missing = new List<string>();
+            foreach (var (n, t) in new (string, Type?)[] {
+                ("CampaignState", _tState), ("CampaignSave", _tSave), ("CampaignSave.Header", _tHeader),
+                ("CampaignDefinition", _tDefinition), ("TaskForce", _tTaskForce), ("Flight", _tFlight),
+                ("GeoPoint", _tGeo), ("RoutePoint", _tRoutePoint), ("Mover", _tMover) })
+                if (t == null) missing.Add(n);
+            if (missing.Count > 0)
+            {
+                Plugin.Log.LogError("[Campaign] fork: found the mod but not " + string.Join(", ", missing) +
+                                    " - a different version? Co-op campaign stays off.");
+                return;
+            }
+
+            var asm = _tSession.Assembly;
             _version = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
                        ?? asm.GetName().Version?.ToString() ?? "unknown";
+            _instance = this;
             _found = true;
-            Plugin.Log.LogInfo($"[Campaign] Found Dynamic Campaign Mod (fork) {_version}" +
-                               (Ready ? "" : " - co-op campaign support not finished yet, staying inert."));
+            Plugin.Log.LogInfo($"[Campaign] fork: Dynamic Campaign Mod (fork) {_version} found - co-op campaign available.");
+
+            HookStateChanges();
+            BindActions();
         }
 
-        // ── Session / phase ───────────────────────────────────────────────────
+        // ── Session accessors ─────────────────────────────────────────────────
 
-        private bool StaticBool(Type? t, string prop) =>
-            t != null && Traverse.Create(t).Property(prop).GetValue<bool>();
+        private static object? GetStatic(Type? t, string prop)
+        {
+            if (t == null) return null;
+            var p = AccessTools.Property(t, prop);
+            return p?.GetValue(null);
+        }
 
-        private object? Sim => _session == null ? null : Traverse.Create(_session).Property("Sim").GetValue();
+        private static object? F(object? o, string field) =>
+            o == null ? null : AccessTools.Field(o.GetType(), field)?.GetValue(o);
 
-        private object? State => Sim == null ? null : Traverse.Create(Sim).Field("State").GetValue();
+        private static void SetF(object o, string field, object? value) =>
+            AccessTools.Field(o.GetType(), field)?.SetValue(o, value);
+
+        private bool SessionActive => GetStatic(_tSession, "Active") is true;
+        private bool BattleActive  => GetStatic(_tBattle, "Active") is true;
+        private object? Sim        => GetStatic(_tSession, "Sim");
+        private object? State      => F(Sim, "State");
+        private object? Definition => GetStatic(_tSession, "Definition");
+
+        private object? _lastDefinition;
 
         public CampaignPhase Phase
         {
@@ -83,28 +142,14 @@ namespace SeapowerMultiplayer.Campaign
             {
                 Probe();
                 if (!_found) return CampaignPhase.None;
-                if (StaticBool(_battle, "Active")) return CampaignPhase.Battle;
-                if (!StaticBool(_session, "Active")) return CampaignPhase.None;
-                var state = State;
-                if (state != null && !string.IsNullOrEmpty(Traverse.Create(state).Field("Victor").GetValue<string>()))
-                    return CampaignPhase.Ended;
+                if (BattleActive) return CampaignPhase.Battle;
+                if (!SessionActive || Sim == null) return CampaignPhase.None;
+                if (!string.IsNullOrEmpty(F(State, "Victor") as string)) return CampaignPhase.Ended;
                 return CampaignPhase.Map;
             }
         }
 
-        // ── Clock: the campaign runs on the game's own GameTime ───────────────
-
-        public double Clock
-        {
-            get
-            {
-                var state = State;
-                if (state == null) return 0;
-                var now = Traverse.Create(state).Field("Now").GetValue<DateTime>();
-                return (now - DateTime.MinValue).TotalSeconds;
-            }
-        }
-
+        public double Clock => F(State, "Now") is DateTime now ? (now - DateTime.MinValue).TotalSeconds : 0;
         public float TimeScale => GameTime.IsPaused() ? 0f : GameTime.TimeCompression;
 
         // ── No Career in the fork ─────────────────────────────────────────────
@@ -114,92 +159,806 @@ namespace SeapowerMultiplayer.Campaign
         public IReadOnlyList<(string key, string name)> ListPosts() => Array.Empty<(string, string)>();
         public void SetPostHeldByHuman(string postKey, bool held) { }
 
-        public static string TaskForceKey(int id) => "tf:" + id;
-        public static string SquadronKey(string id) => "sq:" + id;
+        public static string KeyOf(object mover, Type tTaskForce) =>
+            (tTaskForce.IsInstanceOfType(mover) ? "tf:" : "fl:") + F(mover, "Id");
+
+        // ── Selection (claim hotkey) ──────────────────────────────────────────
+
+        public string? SelectedAssetKey()
+        {
+            try
+            {
+                if (!Singleton<CampaignViewModel>.InstanceExists(false)) return null;
+                var selected = Singleton<CampaignViewModel>.Instance.SelectedGroup;
+                var mirror = GetStatic(_tSession, "Mirror");
+                if (selected == null || mirror == null) return null;
+                var mover = AccessTools.Method(_tMirror, "MoverOf")?.Invoke(mirror, new object[] { selected });
+                return mover == null ? null : KeyOf(mover, _tTaskForce!);
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[Campaign] fork: SelectedAssetKey failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        // ── Battles ───────────────────────────────────────────────────────────
 
         public string? OwnerKeyOfBattleUnit(ObjectBase unit)
         {
-            // TODO(phase 4): BattleSession.Plan is a BattlePlan whose units are
-            // BattleUnit { TaskForce, Squadron, Flight, Tag, GroupName, ... }. Find how
-            // the fork labels the spawned game unit (Tag / GroupName -> unit name or
-            // mission ini section), match it, and return TaskForceKey(bu.TaskForce.Id)
-            // or SquadronKey(bu.Squadron.Id).
+            // BattleSession.PlannedOf(ObjectBase) is the fork's own lookup from a game
+            // unit to its BattleUnit { TaskForce, Flight, Squadron, ... }.
+            var m = AccessTools.Method(_tBattle, "PlannedOf");
+            if (m == null) return null;
+            object? bu;
+            try { bu = m.Invoke(null, new object[] { unit }); }
+            catch { return null; }
+            if (bu == null) return null;
+            if (F(bu, "TaskForce") is object tf) return "tf:" + F(tf, "Id");
+            if (F(bu, "Flight") is object fl) return "fl:" + F(fl, "Id");
             return null;
-        }
-
-        // ── State (phase 2) ───────────────────────────────────────────────────
-
-        public string CaptureState()
-        {
-            // TODO(phase 2): serialize CampaignSim.State with the fork's own save
-            // settings (CampaignSave / Saves - Newtonsoft, PreserveReferences gives
-            // the "$id" fields). Full copy: ~1.6 MB raw, ~154 KB gzipped (Pacific
-            // 2027, June 2027). Per-second updates must be per-task-force deltas with
-            // "$id" stripped - see the plan's Phase 1 findings.
-            return "";
-        }
-
-        public void ApplyState(string state, CampaignPhase phase, double hostClock, float hostTimeScale)
-        {
-            // TODO(phase 2): full copy -> CampaignSession.Load(definition, state, ...);
-            // deltas -> patch TaskForces/Squadrons in place and let MapMirror redraw.
-        }
-
-        // ── Simulation gate (guest) ───────────────────────────────────────────
-
-        private static bool _suppressed;
-        private Harmony? _harmony;
-
-        public void SetSimulationSuppressed(bool suppressed)
-        {
-            _suppressed = suppressed;
-            if (!suppressed || _harmony != null || _sim == null) return;
-            // CampaignSim.Run(double seconds) is the only place the campaign advances:
-            // CampaignDriver.Update calls it every frame. Skipping it on the guest stops
-            // the AI, movement, economy and battle detection there in one place.
-            var run = AccessTools.Method(_sim, "Run", new[] { typeof(double) });
-            if (run == null)
-            {
-                Plugin.Log.LogError("[Campaign] fork: CampaignSim.Run(double) not found - guest campaign NOT suppressed.");
-                return;
-            }
-            _harmony = new Harmony(PluginInfo.PLUGIN_GUID + ".campaign.fork");
-            _harmony.Patch(run, prefix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunGate)));
-            Plugin.Log.LogInfo("[Campaign] fork: guest campaign simulation gated (CampaignSim.Run).");
-        }
-
-        private static bool RunGate(ref int __result)
-        {
-            if (!_suppressed) return true;
-            __result = 0;
-            return false;
         }
 
         public void ReturnToMap()
         {
-            // TODO(phase 4): what the fork does after BattleExit to show the map
-            // (CampaignSession.LoadCampaignScene / OnCampaignSceneLoaded).
+            // Nothing to do: the host's return to the map triggers a full copy, and
+            // applying it (CampaignSession.Load) brings the guest's map back.
         }
 
-        // ── Player actions (phase 3) ──────────────────────────────────────────
-        // Orders (each returns string error or null):
-        //   SetCourse(Mover, GeoPoint target, bool append, bool enterPort = false, bool toField = false)
-        //   Reaim(TaskForce, GeoPoint)            AddWaypoint(Mover, GeoPoint)
-        //   MoveWaypoint(Mover, int, GeoPoint)    MoveWaypoint(Mover, RoutePoint, GeoPoint)
-        //   Sortie(TaskForce)                     FormTaskForce(IReadOnlyList<(TaskForce,int)>, string)
-        //   SplitAtSea(TaskForce, IReadOnlyList<int>, string)   MoveShips(IReadOnlyList<(TaskForce,int)>, TaskForce)
-        //   Sort(TaskForce, TaskForce, IReadOnlyList<Hull>, IReadOnlyList<Hull>)
-        //   MergeAll(TaskForce, TaskForce)        Rename(TaskForce, string)
-        //   SetStation(TaskForce, Hull, Station)  ResetFormation(TaskForce)   SetLeader(TaskForce, Hull)
-        //   ReturnToBase(Flight[, string])
-        // Still to map: AirOperations, Missions, Admiralty, BaseStrikes, Shipyards,
-        // Economy (whatever the UI calls).
-        // Mover = abstract base of TaskForce/Flight { int Id, Name, SideId, Position, Route }.
-        // GeoPoint = struct { double Lat, Lon }.
+        // ══════════════════════════════════════════════════════════════════════
+        //  STATE: capture (host) and apply (guest)
+        // ══════════════════════════════════════════════════════════════════════
+
+        private sealed class Sent
+        {
+            public string Shape = "";
+            public string Motion = "";
+        }
+
+        private readonly Dictionary<string, Sent> _sent = new();   // key -> what the guest has
+        private readonly HashSet<object> _feedSent = new(ReferenceEqualityComparer.Instance);
+        private string _radarSent = "";
+
+        private object? _serializer;
+
+        private object Serializer()
+        {
+            if (_serializer != null) return _serializer;
+            var m = AccessTools.Method(_tSave, "Serializer")
+                    ?? throw new MissingMethodException("CampaignSave.Serializer");
+            return _serializer = m.Invoke(null, null)!;
+        }
+
+        private string ToJson(object o)
+        {
+            var ser = Serializer();
+            var sw = new StringWriter(CultureInfo.InvariantCulture);
+            AccessTools.Method(ser.GetType(), "Serialize", new[] { typeof(TextWriter), typeof(object) })!
+                .Invoke(ser, new object[] { sw, o });
+            return sw.ToString();
+        }
+
+        private object? FromJson(string json, Type t)
+        {
+            var ser = Serializer();
+            return AccessTools.Method(ser.GetType(), "Deserialize", new[] { typeof(TextReader), typeof(Type) })!
+                .Invoke(ser, new object[] { new StringReader(json), t });
+        }
+
+        private static string Num(double d) => d.ToString("R", CultureInfo.InvariantCulture);
+        private static double Dbl(string s) => double.Parse(s, CultureInfo.InvariantCulture);
+
+        private IEnumerable<object> Movers(object state)
+        {
+            if (F(state, "TaskForces") is IList tfs) foreach (var x in tfs) if (x != null) yield return x;
+            if (F(state, "Flights") is IList fls) foreach (var x in fls) if (x != null) yield return x;
+        }
+
+        private string ShapeOf(object mover)
+        {
+            // What makes a mover look different on the map apart from movement:
+            // name, side, ships (task force) or airframes (flight), mission, port.
+            var sb = new StringBuilder();
+            sb.Append(F(mover, "Name")).Append('|').Append(F(mover, "SideId")).Append('|');
+            sb.Append(F(mover, "Mission")?.GetType().Name).Append('|');
+            if (F(mover, "Ships") is IList ships)
+            {
+                sb.Append("ships:");
+                foreach (var h in ships) sb.Append(F(h, "Id")).Append(',');
+                sb.Append('|').Append(F(mover, "PortId"));
+            }
+            if (F(mover, "Airframes") is IList afs) sb.Append("af:").Append(afs.Count).Append('|').Append(F(mover, "Returning"));
+            return sb.ToString();
+        }
+
+        private string MotionOf(object mover)
+        {
+            var sb = new StringBuilder();
+            Geo(F(mover, "Position"), sb);
+            sb.Append('|').Append(Num(F(mover, "SpeedKnots") is double s ? s : 0)).Append('|');
+            if (F(mover, "Route") is IList route)
+                foreach (var rp in route)
+                {
+                    Geo(F(rp, "Point"), sb);
+                    sb.Append(F(rp, "IsWaypoint") is true ? ",w;" : ",r;");
+                }
+            return sb.ToString();
+        }
+
+        private static void Geo(object? g, StringBuilder sb)
+        {
+            if (g == null) { sb.Append("0,0"); return; }
+            sb.Append(Num((double)F(g, "Lat")!)).Append(',').Append(Num((double)F(g, "Lon")!));
+        }
+
+        private object NewGeo(double lat, double lon) =>
+            AccessTools.Constructor(_tGeo, new[] { typeof(double), typeof(double) })!.Invoke(new object[] { lat, lon });
+
+        private static readonly Regex IdRef = new("\"\\$id\":\"\\d+\",?", RegexOptions.Compiled);
+
+        public string CaptureState(bool full)
+        {
+            var state = State;
+            if (state == null || Phase != CampaignPhase.Map) return "";
+            return full ? CaptureFull(state) : CaptureDelta(state);
+        }
+
+        private string CaptureFull(object state)
+        {
+            var def = Definition;
+            var header = Activator.CreateInstance(_tHeader!)!;
+            SetF(header, "Format", 2);
+            SetF(header, "ModVersion", _version);
+            SetF(header, "CampaignId", F(def, "id") ?? AccessTools.Property(_tDefinition, "Id")?.GetValue(def));
+            SetF(header, "CampaignName", F(def, "name"));
+            SetF(header, "Name", "Multiplayer sync");
+            SetF(header, "SavedAt", DateTime.Now);
+            SetF(header, "CampaignTime", F(state, "Now"));
+            SetF(header, "PlayerSideId", F(state, "PlayerSideId"));
+            var write = AccessTools.Method(_tSave, "Write", new[] { _tState!, _tHeader! })
+                        ?? throw new MissingMethodException("CampaignSave.Write");
+            string json = (string)write.Invoke(null, new[] { state, header })!;
+
+            // Everything the guest now has.
+            _sent.Clear();
+            foreach (var m in Movers(state))
+                _sent[KeyOf(m, _tTaskForce!)] = new Sent { Shape = ShapeOf(m), Motion = MotionOf(m) };
+            _feedSent.Clear();
+            if (F(state, "Feed") is IList feed) foreach (var x in feed) if (x != null) _feedSent.Add(x);
+            _radarSent = RadarOf(state);
+
+            Plugin.Log.LogInfo($"[Campaign] fork: full copy captured ({json.Length / 1024} KB, {_sent.Count} movers).");
+            return "F\n" + json;
+        }
+
+        private static string RadarOf(object state) =>
+            F(state, "RadarContacts") is IList rc ? string.Join("\u001f", rc.Cast<object>()) : "";
+
+        private string CaptureDelta(object state)
+        {
+            var sb = new StringBuilder("D\n");
+            sb.Append("now ").Append(((DateTime)F(state, "Now")!).Ticks).Append('\n');
+            int changes = 0;
+
+            var present = new HashSet<string>();
+            foreach (var m in Movers(state))
+            {
+                string key = KeyOf(m, _tTaskForce!);
+                present.Add(key);
+                string shape = ShapeOf(m), motion = MotionOf(m);
+                if (!_sent.TryGetValue(key, out var s))
+                {
+                    _sent[key] = s = new Sent();
+                    s.Shape = "\0new";
+                }
+                if (s.Shape != shape)
+                {
+                    // New, or its make-up changed: the whole object, in the fork's own JSON.
+                    string json = ToJson(m).Replace('\n', ' ');
+                    sb.Append("obj ").Append(key).Append(' ').Append(json).Append('\n');
+                    s.Shape = shape; s.Motion = motion; changes++;
+                }
+                else if (s.Motion != motion)
+                {
+                    sb.Append("mv ").Append(key).Append(' ').Append(motion).Append('\n');
+                    s.Motion = motion; changes++;
+                }
+            }
+            foreach (var key in _sent.Keys.Where(k => !present.Contains(k)).ToList())
+            {
+                sb.Append("del ").Append(key).Append('\n');
+                _sent.Remove(key); changes++;
+            }
+
+            string radar = RadarOf(state);
+            if (radar != _radarSent)
+            {
+                sb.Append("radar ").Append(radar.Replace("\n", " ")).Append('\n');
+                _radarSent = radar; changes++;
+            }
+
+            if (F(state, "Feed") is IList feed)
+                foreach (var msg in feed)
+                    if (msg != null && _feedSent.Add(msg))
+                    {
+                        sb.Append("feed ").Append(ToJson(msg).Replace('\n', ' ')).Append('\n');
+                        changes++;
+                    }
+
+            // Clock only: still worth sending while it runs (dedupe drops it when paused).
+            return sb.ToString();
+        }
+
+        // ── Apply (guest) ─────────────────────────────────────────────────────
+
+        private object? _pendingState;          // full copy handed to CampaignSession.Load, not yet live
+        private readonly Queue<string> _queued = new();
+
+        public void ApplyState(string payload, CampaignPhase phase, double hostClock, float hostTimeScale)
+        {
+            if (payload.StartsWith("F\n")) { ApplyFull(payload.Substring(2)); return; }
+            if (!payload.StartsWith("D\n")) return;
+
+            if (Loading)
+            {
+                // Arrived while the full copy is still loading: keep the order.
+                if (_queued.Count < 2000) _queued.Enqueue(payload);
+                else { _queued.Clear(); CampaignSync.RequestFull("too many updates while loading"); }
+                return;
+            }
+            ApplyDelta(payload);
+        }
+
+        /// <summary>True while a full copy is loading on the guest.</summary>
+        private bool Loading
+        {
+            get
+            {
+                if (_pendingState == null) return false;
+                if (SessionActive && ReferenceEquals(State, _pendingState))
+                {
+                    _pendingState = null;
+                    while (_queued.Count > 0) ApplyDelta(_queued.Dequeue());
+                    return false;
+                }
+                return true;
+            }
+        }
+
+        private float _fullWaitSince = -1f;
+        private string? _heldFull;
+
+        private void ApplyFull(string json)
+        {
+            // Still in the multiplayer battle scene: wait for it to end (max 20 s),
+            // otherwise the campaign scene and the battle would fight over the screen.
+            if (SessionManager.MissionIsLive || SessionManager.SceneLoading)
+            {
+                if (_fullWaitSince < 0) _fullWaitSince = UnityEngine.Time.unscaledTime;
+                if (UnityEngine.Time.unscaledTime - _fullWaitSince < 20f)
+                {
+                    _heldFull = json;
+                    return;
+                }
+            }
+            _fullWaitSince = -1f;
+            _heldFull = null;
+
+            var def = Definition ?? _lastDefinition ?? LoadDefinitionFor(json);
+            if (def == null)
+            {
+                SimSyncManager.ReportIssue("Open Pacific 2027 to join the host's campaign.",
+                    "Load any Pacific 2027 save (or start a new one), then press Ctrl+F6.");
+                return;
+            }
+            _lastDefinition = def;
+
+            var read = AccessTools.Method(_tSave, "Read")
+                       ?? throw new MissingMethodException("CampaignSave.Read");
+            var args = new object?[] { json, def, null, null };
+            var state = read.Invoke(null, args);
+            if (state == null)
+            {
+                SimSyncManager.ReportIssue("Couldn't load the host's campaign.", args[3] as string ?? "Unknown reason - see the log.");
+                return;
+            }
+            _queued.Clear();
+            _pendingState = state;
+            var load = AccessTools.Method(_tSession, "Load", new[] { _tDefinition!, _tState! })
+                       ?? throw new MissingMethodException("CampaignSession.Load");
+            Plugin.Log.LogInfo($"[Campaign] fork: loading the host's campaign ({json.Length / 1024} KB).");
+            load.Invoke(null, new[] { def, state });
+        }
+
+        /// <summary>Guest not in the campaign yet: read the definition straight from
+        /// the fork's folder (fork_campaigns/{name}/campaign.json).</summary>
+        private object? LoadDefinitionFor(string json)
+        {
+            try
+            {
+                var m = Regex.Match(json, "\"CampaignId\"\\s*:\\s*\"([^\"]+)\"");
+                if (!m.Success) return null;
+                string id = m.Groups[1].Value;
+                string folder = Path.GetDirectoryName(_tSession!.Assembly.Location)!;
+                string name = id.Substring(id.LastIndexOf('.') + 1);
+                string path = Path.Combine(folder, "fork_campaigns", name, "campaign.json");
+                if (!File.Exists(path)) return null;
+                return AccessTools.Method(_tDefinition, "Load", new[] { typeof(string) })?.Invoke(null, new object[] { path });
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[Campaign] fork: couldn't read the campaign definition: {ex.Message}");
+                return null;
+            }
+        }
+
+        private void ApplyDelta(string payload)
+        {
+            if (_heldFull != null) { ApplyFull(_heldFull); return; }
+            var state = State;
+            if (state == null) return;   // not in the campaign (yet): the full copy will come
+
+            var byKey = new Dictionary<string, (object mover, IList list)>();
+            var tfs = (IList)F(state, "TaskForces")!;
+            var fls = (IList)F(state, "Flights")!;
+            foreach (var m in tfs) if (m != null) byKey[KeyOf(m, _tTaskForce!)] = (m, tfs);
+            foreach (var m in fls) if (m != null) byKey[KeyOf(m, _tTaskForce!)] = (m, fls);
+
+            bool lost = false;
+            foreach (var line in payload.Split('\n'))
+            {
+                if (line.Length < 4) continue;
+                int sp = line.IndexOf(' ');
+                string kind = line.Substring(0, sp), rest = line.Substring(sp + 1);
+                try
+                {
+                    switch (kind)
+                    {
+                        case "now":
+                            SetF(state, "Now", new DateTime(long.Parse(rest, CultureInfo.InvariantCulture)));
+                            break;
+                        case "mv":
+                        {
+                            int k = rest.IndexOf(' ');
+                            string key = rest.Substring(0, k);
+                            if (byKey.TryGetValue(key, out var e)) ApplyMotion(e.mover, rest.Substring(k + 1));
+                            else lost = true;
+                            break;
+                        }
+                        case "obj":
+                        {
+                            int k = rest.IndexOf(' ');
+                            string key = rest.Substring(0, k);
+                            bool isTf = key.StartsWith("tf:");
+                            var obj = FromJson(rest.Substring(k + 1), isTf ? _tTaskForce! : _tFlight!);
+                            if (obj == null) { lost = true; break; }
+                            var list = isTf ? tfs : fls;
+                            if (byKey.TryGetValue(key, out var e))
+                            {
+                                int i = e.list.IndexOf(e.mover);
+                                if (i >= 0) e.list[i] = obj; else list.Add(obj);
+                            }
+                            else list.Add(obj);
+                            byKey[key] = (obj, list);
+                            break;
+                        }
+                        case "del":
+                            if (byKey.TryGetValue(rest, out var d)) { d.list.Remove(d.mover); byKey.Remove(rest); }
+                            break;
+                        case "radar":
+                            if (F(state, "RadarContacts") is IList rc)
+                            {
+                                rc.Clear();
+                                if (rest.Length > 0) foreach (var c in rest.Split('\u001f')) rc.Add(c);
+                            }
+                            break;
+                        case "feed":
+                        {
+                            var feed = F(state, "Feed") as IList;
+                            var elem = feed?.GetType().GetGenericArguments().FirstOrDefault();
+                            if (feed == null || elem == null) break;
+                            var msg = FromJson(rest, elem);
+                            if (msg != null) feed.Add(msg);
+                            while (feed.Count > 600) feed.RemoveAt(0);
+                            break;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.LogWarning($"[Campaign] fork: couldn't apply '{kind}': {ex.Message}");
+                    lost = true;
+                }
+            }
+            if (lost) CampaignSync.RequestFull("update referred to something this map doesn't have");
+        }
+
+        private void ApplyMotion(object mover, string motion)
+        {
+            var parts = motion.Split('|');
+            var pos = parts[0].Split(',');
+            SetF(mover, "Position", NewGeo(Dbl(pos[0]), Dbl(pos[1])));
+            SetF(mover, "SpeedKnots", Dbl(parts[1]));
+            if (F(mover, "Route") is IList route)
+            {
+                route.Clear();
+                if (parts.Length > 2)
+                    foreach (var p in parts[2].Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        var c = p.Split(',');
+                        var rp = Activator.CreateInstance(_tRoutePoint!)!;
+                        SetF(rp, "Point", NewGeo(Dbl(c[0]), Dbl(c[1])));
+                        SetF(rp, "IsWaypoint", c.Length > 2 && c[2] == "w");
+                        route.Add(rp);
+                    }
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  SIMULATION GATE (guest) + state-changed signal (host)
+        // ══════════════════════════════════════════════════════════════════════
+
+        private static bool _suppressed;
+        private Harmony? _harmony;
+        private Harmony H => _harmony ??= new Harmony(PluginInfo.PLUGIN_GUID + ".campaign.fork");
+
+        public void SetSimulationSuppressed(bool suppressed)
+        {
+            _suppressed = suppressed;
+            Plugin.Log.LogInfo($"[Campaign] fork: guest campaign simulation {(suppressed ? "OFF (host runs it)" : "back on")}.");
+        }
+
+        private void HookStateChanges()
+        {
+            // CampaignSim.Run(double seconds) is the only place the campaign advances
+            // (CampaignDriver.Update calls it every frame). One patch does both jobs:
+            // skip it on a suppressed guest; signal "state changed" on the host.
+            var run = AccessTools.Method(_tSim, "Run", new[] { typeof(double) });
+            if (run == null)
+            {
+                Plugin.Log.LogError("[Campaign] fork: CampaignSim.Run(double) not found - co-op campaign can't gate the guest.");
+                _found = false;
+                return;
+            }
+            H.Patch(run,
+                prefix:  new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPrefix)),
+                postfix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPostfix)));
+        }
+
+        private static bool RunPrefix(ref int __result)
+        {
+            if (!_suppressed) { CampaignSync.SimStepping = true; return true; }
+            __result = 0;
+            return false;
+        }
+
+        private static void RunPostfix()
+        {
+            CampaignSync.SimStepping = false;
+            _instance?.StateChanged?.Invoke();
+        }
+
+        // ══════════════════════════════════════════════════════════════════════
+        //  PLAYER ACTIONS
+        // ══════════════════════════════════════════════════════════════════════
+
+        /// <summary>Sim field holding each actions class.</summary>
+        private static readonly (string type, string simField)[] ActionClasses =
+        {
+            ("Core.Sim.Orders", "Orders"),
+            ("Core.Sim.Missions", "Missions"),
+            ("Core.Sim.BaseStrikes", "Strikes"),
+            ("Core.Sim.AirOperations", "Air"),
+            ("Core.Sim.Admiralty", "Admiralty"),
+            ("Core.Sim.Shipyards", "Shipyards"),
+        };
+
+        /// <summary>Player actions, by class. Everything else in these classes is
+        /// either a query or something the simulation calls itself.</summary>
+        private static readonly Dictionary<string, string[]> Actions = new()
+        {
+            ["Orders"]    = new[] { "SetCourse", "Reaim", "MoveWaypoint", "AddWaypoint", "Sortie", "FormTaskForce",
+                                    "SplitAtSea", "Sort", "MoveShips", "Rename", "SetStation", "ResetFormation",
+                                    "SetLeader", "MergeRefused", "EndMerge", "MergeAll", "ReturnToBase" },
+            ["Missions"]  = new[] { "Patrol", "Hunt", "Relieve", "Cap", "Search", "Redraw", "StrikeBase", "Refuel",
+                                    "TankerStation", "Cover", "Escort", "Follow", "Rendezvous", "Replenish",
+                                    "Invade", "Join", "Cancel", "Course", "End" },
+            ["Strikes"]   = new[] { "Strike", "Release" },
+            ["Air"]       = new[] { "Prepare", "Launch", "Cancel", "Detach" },
+            ["Admiralty"] = new[] { "Accept", "Decline" },
+            ["Shipyards"] = new[] { "Order", "Cancel", "Deliver" },
+        };
+
+        private void BindActions()
+        {
+            int synced = 0, hostOnly = 0;
+            foreach (var (typeName, simField) in ActionClasses)
+            {
+                var t = T(typeName);
+                if (t == null || !Actions.TryGetValue(simField, out var names)) continue;
+                foreach (var m in t.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly))
+                {
+                    if (!names.Contains(m.Name)) continue;
+                    // Methods the sim itself calls with the same name but other shapes
+                    // (e.g. AirOperations.ReturnToBase with optional flags) are left alone
+                    // unless they are on the list above for that class.
+                    if (Syncable(m))
+                    {
+                        string id = $"{simField}.{m.Name}/{string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name))}";
+                        var method = m;
+                        string field = simField;
+                        CampaignInterceptor.Bind(new CampaignInterceptor.Binding
+                        {
+                            CommandId = id,
+                            Target = m,
+                            Capture = (inst, args) => Encode(id, method, args),
+                            Execute = (CampaignCommand c, out string why) => Execute(field, method, c, out why),
+                        });
+                        synced++;
+                    }
+                    else
+                    {
+                        BindHostOnly(m);
+                        hostOnly++;
+                    }
+                }
+            }
+            Plugin.Log.LogInfo($"[Campaign] fork: {synced} player actions shared with the host, {hostOnly} host-only.");
+        }
+
+        /// <summary>Can be sent to the host: every argument encodes, and the return
+        /// value is nothing the guest's UI needs straight away (void, string, bool).</summary>
+        private bool Syncable(MethodInfo m)
+        {
+            var r = m.ReturnType;
+            if (r != typeof(void) && r != typeof(string) && r != typeof(bool)) return false;
+            foreach (var p in m.GetParameters())
+                if (p.IsOut || p.ParameterType.IsByRef || !CanEncode(p.ParameterType)) return false;
+            return true;
+        }
+
+        // ── Host-only actions on the guest ────────────────────────────────────
+
+        private static readonly Dictionary<MethodBase, string> _hostOnly = new();
+        private const string HostOnlyText = "Only the host can do this in a co-op campaign (for now).";
+
+        private void BindHostOnly(MethodInfo m)
+        {
+            try
+            {
+                _hostOnly[m] = m.DeclaringType!.Name + "." + m.Name;
+                var prefix = m.ReturnType == typeof(string)
+                    ? nameof(HostOnlyStringPrefix)
+                    : nameof(HostOnlyPrefix);
+                H.Patch(m, prefix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), prefix));
+            }
+            catch (Exception ex)
+            {
+                Plugin.Log.LogWarning($"[Campaign] fork: couldn't guard {m.DeclaringType?.Name}.{m.Name}: {ex.Message}");
+            }
+        }
+
+        private static bool GuestBlocked(MethodBase original)
+        {
+            if (!CampaignSync.IsActive || Plugin.Instance.CfgIsHost.Value || CampaignSync.ApplyingFromNetwork) return false;
+            Plugin.Log.LogInfo($"[Campaign] fork: guest tried host-only action {(_hostOnly.TryGetValue(original, out var n) ? n : original.Name)}.");
+            SimSyncManager.ReportIssue("Host only.", HostOnlyText, warning: true);
+            return true;
+        }
+
+        private static bool HostOnlyStringPrefix(MethodBase __originalMethod, ref string __result)
+        {
+            if (!GuestBlocked(__originalMethod)) return true;
+            __result = HostOnlyText;
+            return false;
+        }
+
+        private static bool HostOnlyPrefix(MethodBase __originalMethod) => !GuestBlocked(__originalMethod);
+
+        // ── Encoding ──────────────────────────────────────────────────────────
+
+        private bool IsList(Type t, out Type elem)
+        {
+            elem = typeof(object);
+            if (!t.IsGenericType) return false;
+            var g = t.GetGenericTypeDefinition();
+            if (g != typeof(List<>) && g != typeof(IReadOnlyList<>) && g != typeof(IList<>)
+                && g != typeof(IEnumerable<>) && g != typeof(IReadOnlyCollection<>)) return false;
+            elem = t.GetGenericArguments()[0];
+            return true;
+        }
+
+        private bool CanEncode(Type t)
+        {
+            if (t == typeof(string) || t == typeof(int) || t == typeof(double) || t == typeof(float)
+                || t == typeof(bool) || t.IsEnum) return true;
+            if (t == _tGeo) return true;
+            var nn = Nullable.GetUnderlyingType(t);
+            if (nn != null) return CanEncode(nn);
+            if (_tMover!.IsAssignableFrom(t) || t == _tHull || t == _tBaseDef || t == _tPendingFlight || t == _tRoutePoint) return true;
+            if (IsList(t, out var e))
+            {
+                if (e.IsGenericType && e.GetGenericTypeDefinition() == typeof(ValueTuple<,>))
+                {
+                    var a = e.GetGenericArguments();
+                    return CanEncode(a[0]) && CanEncode(a[1]) && !IsList(a[0], out _) && !IsList(a[1], out _);
+                }
+                return CanEncode(e) && !IsList(e, out _);
+            }
+            return false;
+        }
+
+        private CampaignCommand? Encode(string id, MethodInfo m, object?[] args)
+        {
+            var cmd = new CampaignCommand { Id = id };
+            var ps = m.GetParameters();
+            for (int i = 0; i < ps.Length; i++)
+            {
+                string enc = Enc(args[i]);
+                cmd.Arg("a" + i, enc);
+                if (cmd.AssetKey.Length == 0 && (enc.StartsWith("tf:") || enc.StartsWith("fl:")))
+                    cmd.AssetKey = enc;
+            }
+            return cmd;
+        }
+
+        private string Enc(object? v)
+        {
+            switch (v)
+            {
+                case null: return "n:";
+                case string s: return "s:" + s;
+                case bool b: return b ? "v:1" : "v:0";
+                case int i: return "v:" + i.ToString(CultureInfo.InvariantCulture);
+                case double d: return "v:" + Num(d);
+                case float f: return "v:" + f.ToString("R", CultureInfo.InvariantCulture);
+                case Enum e: return "v:" + Convert.ToInt32(e).ToString(CultureInfo.InvariantCulture);
+            }
+            var t = v.GetType();
+            if (t == _tGeo) { var sb = new StringBuilder("g:"); Geo(v, sb); return sb.ToString(); }
+            if (_tMover!.IsInstanceOfType(v)) return KeyOf(v, _tTaskForce!);
+            if (t == _tHull) return "h:" + F(v, "Id");
+            if (t == _tBaseDef) return "b:" + F(v, "id");
+            if (t == _tPendingFlight) return "pf:" + F(v, "Id");
+            if (t == _tRoutePoint) return EncRoutePoint(v);
+            if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ValueTuple<,>))
+                return "t:" + Esc(Enc(t.GetField("Item1")!.GetValue(v))) + "\u001e" + Esc(Enc(t.GetField("Item2")!.GetValue(v)));
+            if (v is IEnumerable list)
+                return "l:" + string.Join("\u001d", list.Cast<object?>().Select(x => Esc(Enc(x))));
+            throw new NotSupportedException("can't send a " + t.Name);
+        }
+
+        private static string Esc(string s) => s.Replace("\u001d", " ").Replace("\u001e", " ");
+
+        private string EncRoutePoint(object rp)
+        {
+            var state = State;
+            if (state != null)
+                foreach (var m in Movers(state))
+                    if (F(m, "Route") is IList route)
+                    {
+                        int i = route.IndexOf(rp);
+                        if (i >= 0) return "rp:" + KeyOf(m, _tTaskForce!) + "#" + i;
+                    }
+            throw new InvalidOperationException("route point not found");
+        }
+
+        private object? Dec(string s, Type t)
+        {
+            int c = s.IndexOf(':');
+            string kind = s.Substring(0, c), body = s.Substring(c + 1);
+            var nn = Nullable.GetUnderlyingType(t);
+            switch (kind)
+            {
+                case "n": return null;
+                case "s": return body;
+                case "v":
+                {
+                    var target = nn ?? t;
+                    if (target.IsEnum) return Enum.ToObject(target, int.Parse(body, CultureInfo.InvariantCulture));
+                    if (target == typeof(bool)) return body == "1";
+                    return Convert.ChangeType(body, target, CultureInfo.InvariantCulture);
+                }
+                case "g": { var p = body.Split(','); return NewGeo(Dbl(p[0]), Dbl(p[1])); }
+                case "tf":
+                case "fl":
+                    return FindMover(s) ?? throw new KeyNotFoundException((kind == "tf" ? "task force " : "flight ") + body + " no longer exists");
+                case "h": return FindHull(int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("ship no longer exists");
+                case "b": return FindBase(body) ?? throw new KeyNotFoundException("base " + body);
+                case "pf": return FindIn("PendingFlights", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("prepared flight no longer exists");
+                case "rp":
+                {
+                    int h = body.LastIndexOf('#');
+                    var mover = FindMover(body.Substring(0, h)) ?? throw new KeyNotFoundException("route owner gone");
+                    var route = (IList)F(mover, "Route")!;
+                    int i = int.Parse(body.Substring(h + 1), CultureInfo.InvariantCulture);
+                    return i < route.Count ? route[i] : throw new KeyNotFoundException("waypoint gone");
+                }
+                case "t":
+                {
+                    var parts = body.Split('\u001e');
+                    var a = t.GetGenericArguments();
+                    return Activator.CreateInstance(t, Dec(parts[0], a[0]), Dec(parts[1], a[1]));
+                }
+                case "l":
+                {
+                    IsList(t, out var e);
+                    var list = (IList)Activator.CreateInstance(typeof(List<>).MakeGenericType(e))!;
+                    if (body.Length > 0) foreach (var x in body.Split('\u001d')) list.Add(Dec(x, e));
+                    return list;
+                }
+            }
+            throw new NotSupportedException("unknown argument kind " + kind);
+        }
+
+        private object? FindMover(string key)
+        {
+            var state = State;
+            if (state == null) return null;
+            foreach (var m in Movers(state)) if (KeyOf(m, _tTaskForce!) == key) return m;
+            return null;
+        }
+
+        private object? FindIn(string listField, int id)
+        {
+            if (F(State, listField) is IList list)
+                foreach (var x in list) if (x != null && F(x, "Id") is int i && i == id) return x;
+            return null;
+        }
+
+        private object? FindHull(int id)
+        {
+            if (F(State, "TaskForces") is IList tfs)
+                foreach (var tf in tfs)
+                    if (F(tf, "Ships") is IList ships)
+                        foreach (var h in ships) if (h != null && F(h, "Id") is int i && i == id) return h;
+            return null;
+        }
+
+        private object? FindBase(string id)
+        {
+            if (F(Definition, "bases") is IList bases)
+                foreach (var b in bases) if (b != null && (F(b, "id") as string) == id) return b;
+            return null;
+        }
+
+        private bool Execute(string simField, MethodInfo m, CampaignCommand c, out string why)
+        {
+            var target = F(Sim, simField);
+            if (target == null) { why = "The host's campaign isn't running."; return false; }
+            var ps = m.GetParameters();
+            var args = new object?[ps.Length];
+            try
+            {
+                for (int i = 0; i < ps.Length; i++)
+                {
+                    string? enc = c.Get("a" + i);
+                    args[i] = enc == null ? (ps[i].HasDefaultValue ? ps[i].DefaultValue : null) : Dec(enc, ps[i].ParameterType);
+                }
+            }
+            catch (Exception ex)
+            {
+                why = ex.Message;
+                return false;
+            }
+            var result = m.Invoke(target, args);
+            if (result is string err && !string.IsNullOrEmpty(err)) { why = err; return false; }
+            if (result is false) { why = "The campaign refused that."; return false; }
+            why = "";
+            RaiseStateChanged();
+            return true;
+        }
 
         public bool TryExecute(CampaignCommand command, out string reason) =>
             CampaignInterceptor.TryExecute(command, out reason);
 
         internal void RaiseStateChanged() => StateChanged?.Invoke();
+
+        private sealed class ReferenceEqualityComparer : IEqualityComparer<object>
+        {
+            public static readonly ReferenceEqualityComparer Instance = new();
+            public new bool Equals(object x, object y) => ReferenceEquals(x, y);
+            public int GetHashCode(object o) => System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(o);
+        }
     }
 }

@@ -152,6 +152,9 @@ namespace SeapowerMultiplayer
         internal ConfigEntry<bool> CfgCampaignSync = null!;
         internal ConfigEntry<bool> CfgCampaignAutoSendBattles = null!;
         internal ConfigEntry<float> CfgCampaignSnapshotIntervalSec = null!;
+        internal ConfigEntry<BepInEx.Configuration.KeyboardShortcut> CfgCampaignKeyClaim = null!;
+        internal ConfigEntry<BepInEx.Configuration.KeyboardShortcut> CfgCampaignKeyResync = null!;
+        internal ConfigEntry<bool> CfgPartnerCursors = null!;
 
         // Opt-in diagnostics
         internal ConfigEntry<bool>   CfgShareDiagnostics = null!;
@@ -283,6 +286,17 @@ namespace SeapowerMultiplayer
                 "Seconds between campaign-map state updates sent to the guest while the campaign " +
                 "clock runs (default 1). Lower = smoother guest map, more bandwidth. The guest's " +
                 "map moves fleets between updates on its own, so 1-2 s is usually enough.");
+            CfgPartnerCursors = Config.Bind("Campaign", "PartnerCursors", true,
+                "Show your teammates' mouse cursors on the map (campaign globe and battle map), " +
+                "and send yours to them. Teammates only - never shown to the other side in PvP.");
+            CfgCampaignKeyClaim = Config.Bind("Campaign", "KeyClaim",
+                new BepInEx.Configuration.KeyboardShortcut(KeyCode.F7, KeyCode.LeftControl),
+                "Campaign map: claim the selected task force or flight (only you can order it), " +
+                "or release it if it is already yours.");
+            CfgCampaignKeyResync = Config.Bind("Campaign", "KeyResync",
+                new BepInEx.Configuration.KeyboardShortcut(KeyCode.F6, KeyCode.LeftControl),
+                "Guest, campaign map: ask the host for a complete copy of the campaign (shows a " +
+                "loading screen). Use it if your map looks out of date.");
 
             // Opt-in diagnostics. Off until the player says otherwise; nothing is
             // captured or sent while it is off. See PRIVACY.md.
@@ -556,6 +570,7 @@ namespace SeapowerMultiplayer
 
             // Co-op campaign layer (fork): command routing + snapshot stream
             Campaign.CampaignSync.Tick();
+            PartnerCursors.Tick();
 
             // Hold the sim frozen while a dropped peer is being recovered
             ReconnectManager.Tick();

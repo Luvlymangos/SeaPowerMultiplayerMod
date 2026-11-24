@@ -52,7 +52,7 @@ namespace SeapowerMultiplayer.Net2
         // carries the carrier's embarked ground cargo (game 0.9 transport launches).
         // Mission triggers fire on the host only: TriggerFired (43) / TriggerRequest (44).
         // 240 (fork): co-op campaign layer - CampaignCommand/Result/SnapshotChunk/
-        // ResyncRequest/Ownership (MessageType 45-49). Deliberately refuses upstream
+        // ResyncRequest/Ownership (MessageType 45-49), PartnerCursor (50). Deliberately refuses upstream
         // 239 builds, which would log every campaign message as unknown.
         public const ushort ProtocolVersion = 240;
 

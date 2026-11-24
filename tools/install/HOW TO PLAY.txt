@@ -1,0 +1,43 @@
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2
+=========================================================
+
+INSTALL (both players)
+  1. Unzip this whole folder anywhere.
+  2. Double-click "Install (double-click me).bat".
+  3. If it warns about the Workshop copy of Seapower Multiplayer, unsubscribe
+     from it in Steam. Both players must use THIS build.
+  Both players also need Pacific 2027 ("Dynamic Campaign Mod (fork)") and
+  Bungalow's "Dynamic Campaign Mod" from the Workshop, same versions.
+
+PLAY PACIFIC 2027 TOGETHER
+  1. Host: load your Pacific 2027 campaign.
+  2. Host: Ctrl+F9 -> Host, invite your partner through Steam.
+  3. Guest: accept. The host's campaign loads on your PC automatically
+     (loading screen). If it doesn't: load any Pacific 2027 save, then Ctrl+F6.
+  4. The host's game runs the campaign; the guest's map follows it.
+
+COMMANDING
+  - Everything starts SHARED: either player can order any task force/flight.
+  - Ctrl+F7 on the campaign map: claim the selected task force or flight
+    (only you can order it), or release it if it's yours.
+  - Guest orders go to the host's game; you'll see them a second later.
+  - Host-only for now: shipyard orders, Admiralty orders, preparing and
+    launching air strikes from airfields, refits, forming/splitting task forces.
+  - Ctrl+F6 (guest): reload the host's campaign if your map looks wrong.
+  - Fuel, stocks and intel on the guest's map refresh after each battle
+    (or Ctrl+F6); positions and routes update every second.
+
+SEEING EACH OTHER
+  - Your partner's mouse shows on your map (campaign globe and battle map)
+    as a coloured marker with their Steam name. Turn it off in the config:
+    [Campaign] PartnerCursors = false.
+
+BATTLES
+  - When the host's campaign starts a battle, it's sent to the guest
+    automatically. The guest starts with the task forces they claimed;
+    the host has the rest and can send formations over as usual.
+  - After the battle the guest is brought back to the campaign map.
+
+IF SOMETHING BREAKS
+  Send BepInEx\LogOutput.log from BOTH PCs (in the Sea Power folder),
+  plus a line on what you were doing.
