@@ -1202,13 +1202,12 @@ namespace SeapowerMultiplayer.UI
             if (version == _inviteSidesVersion) return;
             _inviteSidesVersion = version;
 
+            // Fork: one "Invite Player" button - co-op is what this build is for, so
+            // the invitee joins your side (the host can still move players in the
+            // player list).
             InviteOptions.Clear();
-            foreach (var team in SideTable.All)
-            {
-                var t = team;
-                InviteOptions.Add(new SideButtonVm($"Invite player to {Teams.Name(t)}", true,
-                                                   new DelegateCommand(_ => SteamLobbyManager.InviteToTeam(t))));
-            }
+            InviteOptions.Add(new SideButtonVm("Invite Player", true,
+                                               new DelegateCommand(_ => SteamLobbyManager.InviteToTeam(Team.Host))));
         }
 
         private void RefreshSettingsLock(NetworkManager nm)
