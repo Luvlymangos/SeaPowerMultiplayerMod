@@ -523,7 +523,8 @@ namespace SeapowerMultiplayer
             if (match.Success)
             {
                 string relPath = match.Groups[1].Value.Trim();
-                string fullPath = Singleton<FileManager>.Instance.GetFile(relPath);
+                string fullPath = ResolveMissionFile(relPath);
+                Log.LogInfo($"[Session] Save's BaseFile '{relPath}' -> {(fullPath ?? "NOT FOUND")}");
                 if (fullPath != null && File.Exists(fullPath))
                 {
                     missionFileName    = Path.GetFileName(fullPath);
@@ -736,6 +737,33 @@ namespace SeapowerMultiplayer
             SceneLoading = true;
             DoUnloadAndLoad();
             Log.LogInfo($"[Session] Loading mission by name: {Path.GetFileName(missionPath)}");
+        }
+
+        /// <summary>
+        /// Where the save's BaseFile really is. The game's own lookup only searches its
+        /// mission folders; a dynamic campaign writes each battle's mission into its own
+        /// campaign folder and the save names it by absolute path (or relative to the
+        /// game's data folder), so try those too - and the mission that is open now.
+        /// </summary>
+        private static string? ResolveMissionFile(string relPath)
+        {
+            var tries = new List<string>();
+            try { string? g = Singleton<FileManager>.Instance.GetFile(relPath); if (!string.IsNullOrEmpty(g)) tries.Add(g!); } catch { }
+            try
+            {
+                string norm = relPath.Replace('\\', '/');
+                if (Path.IsPathRooted(norm)) tries.Add(norm);
+                tries.Add(Path.Combine(Application.persistentDataPath, norm));
+                tries.Add(Path.Combine(Application.streamingAssetsPath, norm));
+                string? cur = Globals.currentMissionFilePath;
+                if (!string.IsNullOrEmpty(cur) &&
+                    string.Equals(Path.GetFileName(cur), Path.GetFileName(norm), System.StringComparison.OrdinalIgnoreCase))
+                    tries.Add(cur!);
+            }
+            catch { }
+            foreach (var t in tries)
+                try { if (File.Exists(t)) return t; } catch { }
+            return null;
         }
 
         private static void ApplyBySaveFile(SessionSyncMessage msg)
