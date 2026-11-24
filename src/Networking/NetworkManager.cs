@@ -1322,6 +1322,15 @@ namespace SeapowerMultiplayer
             // Any side index; HostTryAdd seats a request this mission has no side for on
             // the enemy side instead.
             var requestedTeam = (Team)msg.RequestedTeam;
+            // Fork: while the host is in a shared campaign, a joiner is always seated
+            // on the host's side - the co-op campaign is the reason they're joining, and
+            // landing on the enemy side (a stale PvP invite or setting) would switch it off.
+            if (Plugin.Instance.CfgCampaignSync.Value && Campaign.CampaignSync.Adapter.IsAvailable
+                && Campaign.CampaignSync.Adapter.Phase != Campaign.CampaignPhase.None && requestedTeam != Team.Host)
+            {
+                Log.LogInfo($"[Handshake] Campaign in progress - seating the joiner on my side instead of {requestedTeam}.");
+                requestedTeam = Team.Host;
+            }
             PlayerInfo? seated = null;
             // Sanitized on RECEIPT, not just where it was typed: this arrived off the
             // wire, and the name goes straight into every other player's roster row and
