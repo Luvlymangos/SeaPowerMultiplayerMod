@@ -82,6 +82,9 @@ namespace SeapowerMultiplayer.Campaign
         /// (for the claim hotkey), or null.</summary>
         string? SelectedAssetKey();
 
+        /// <summary>Guest: a full copy of the host's campaign is loading.</summary>
+        bool IsLoading { get; }
+
         /// <summary>Display name of what is selected on the local campaign map, or null.</summary>
         string? SelectedAssetName();
 
@@ -139,6 +142,7 @@ namespace SeapowerMultiplayer.Campaign
         public string CaptureState(bool full) => "";
         public string? SelectedAssetKey() => null;
         public string? SelectedAssetName() => null;
+        public bool IsLoading => false;
         public bool TryExecute(CampaignCommand command, out string reason)
         {
             reason = "No campaign mod is loaded on the host.";

@@ -83,6 +83,15 @@ namespace SeapowerMultiplayer.Campaign
 
         private static int _applyingDepth;
 
+        // ── Join progress (for JoinProgress) ──────────────────────────────────
+        /// <summary>Guest: has any campaign state been applied since connecting.</summary>
+        public static bool AppliedAny => _appliedRevision > 0;
+        /// <summary>Guest: a multi-piece snapshot is arriving - (received, total), or (0,0).</summary>
+        public static (int received, int total) Receiving =>
+            _asmChunks.Length > 1 ? (_asmReceived, _asmChunks.Length) : (0, 0);
+        /// <summary>Host's campaign phase as last seen by the guest.</summary>
+        public static CampaignPhase HostPhase => _lastHostPhase;
+
         /// <summary>True while CampaignSync is executing a network-originated action.
         /// Adapter interception prefixes must let the call through when this is set,
         /// otherwise the host's execution of a guest command would be intercepted too.</summary>

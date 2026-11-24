@@ -47,6 +47,15 @@ namespace SeapowerMultiplayer
         private static bool Enabled => Plugin.Instance.CfgModSync.Value && NetworkManager.Instance.IsEstablished;
         private static bool IsHost => Plugin.Instance.CfgIsHost.Value;
 
+        // ── Progress (for JoinProgress) ───────────────────────────────────────
+        private static int _downloadTotal;
+        internal static bool RestartNeeded { get; private set; }
+        internal static bool ListComplete => _incoming != null && _received >= _incoming.Length;
+        internal static bool Requested => _requested;
+        internal static float ListFraction => _incoming == null || _incoming.Length == 0 ? 0f : _received / (float)_incoming.Length;
+        internal static int DownloadsLeft => _waitingFor.Count;
+        internal static int DownloadsTotal => _downloadTotal;
+
         // ── Local mod list ────────────────────────────────────────────────────
 
         private static List<SearchDirectory> SettingsMods()
@@ -187,6 +196,7 @@ namespace SeapowerMultiplayer
             if (MatchChecks(host, out var changed)) restart = true;
             notes.AddRange(changed);
 
+            _downloadTotal = _waitingFor.Count;
             if (_waitingFor.Count > 0)
             {
                 _waitStarted = Time.unscaledTime;
@@ -305,6 +315,7 @@ namespace SeapowerMultiplayer
 
         private static void FinishMessage(List<string> notes, bool onlyMissing)
         {
+            if (!onlyMissing) RestartNeeded = true;
             string detail = notes.Count > 0 ? string.Join("; ", notes) + ". " : "";
             if (onlyMissing)
                 SimSyncManager.ReportIssue("Some of the host's mods aren't on the Workshop.", detail);
@@ -319,6 +330,8 @@ namespace SeapowerMultiplayer
             _incoming = null;
             _received = 0;
             _requested = false;
+            _downloadTotal = 0;
+            RestartNeeded = false;
             // Downloads already asked of Steam carry on regardless.
             _waitingFor.Clear();
         }

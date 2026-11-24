@@ -246,6 +246,8 @@ namespace SeapowerMultiplayer
 
         public bool IsHost => _isHost;
         public bool IsHostRunning => _running && _isHost;
+        /// <summary>Fork: a guest that has started connecting but isn't through the handshake yet.</summary>
+        public bool IsJoining => _running && !_isHost && !IsEstablished;
 
         public void StartHost(int port)
         {
@@ -756,6 +758,7 @@ namespace SeapowerMultiplayer
                 Campaign.CampaignSync.Reset();
                 PartnerCursors.Reset();
                 ModSync.Reset();
+                JoinProgress.Reset();
                 UnitStatusManager.Reset();
                 OrderRefusalNotice.Reset();
                 AttackDesignationSync.Reset();
@@ -1203,6 +1206,14 @@ namespace SeapowerMultiplayer
                     var msg = ModSyncReportMessage.Deserialize(reader);
                     byte slot = SlotOf(from);
                     _mainThreadQueue.Enqueue(() => ModSync.HandleReport(slot, msg));
+                    break;
+                }
+
+                case MessageType.JoinProgress:
+                {
+                    var msg = JoinProgressMessage.Deserialize(reader);
+                    byte slot = SlotOf(from);
+                    _mainThreadQueue.Enqueue(() => JoinProgress.OnReport(slot, msg));
                     break;
                 }
 

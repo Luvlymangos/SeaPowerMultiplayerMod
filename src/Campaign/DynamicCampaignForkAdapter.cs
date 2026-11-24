@@ -515,6 +515,8 @@ namespace SeapowerMultiplayer.Campaign
             ApplyDelta(payload);
         }
 
+        public bool IsLoading => _pendingState != null || _heldFull != null;
+
         /// <summary>True while a full copy is loading on the guest.</summary>
         private bool Loading
         {

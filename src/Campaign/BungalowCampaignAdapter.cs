@@ -110,6 +110,7 @@ namespace SeapowerMultiplayer.Campaign
 
         public string? SelectedAssetKey() => null;   // TODO(decompile)
         public string? SelectedAssetName() => null;
+        public bool IsLoading => false;
 
         public string CaptureState(bool full)
         {

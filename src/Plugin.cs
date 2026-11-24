@@ -580,6 +580,7 @@ namespace SeapowerMultiplayer
             Campaign.CampaignSync.Tick();
             PartnerCursors.Tick();
             ModSync.Tick();
+            JoinProgress.Tick();
 
             // Hold the sim frozen while a dropped peer is being recovered
             ReconnectManager.Tick();
