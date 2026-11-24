@@ -82,6 +82,9 @@ namespace SeapowerMultiplayer.Campaign
         /// (for the claim hotkey), or null.</summary>
         string? SelectedAssetKey();
 
+        /// <summary>Display name of what is selected on the local campaign map, or null.</summary>
+        string? SelectedAssetName();
+
         /// <summary>Run a command the guest asked for, through the mod's own code
         /// path (as if the host had clicked it). Return false + reason to reject.</summary>
         bool TryExecute(CampaignCommand command, out string reason);
@@ -135,6 +138,7 @@ namespace SeapowerMultiplayer.Campaign
 
         public string CaptureState(bool full) => "";
         public string? SelectedAssetKey() => null;
+        public string? SelectedAssetName() => null;
         public bool TryExecute(CampaignCommand command, out string reason)
         {
             reason = "No campaign mod is loaded on the host.";

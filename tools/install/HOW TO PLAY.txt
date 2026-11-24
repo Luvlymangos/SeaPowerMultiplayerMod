@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2d
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2e
 =========================================================
 
 INSTALL (both players)
@@ -27,8 +27,9 @@ PLAY PACIFIC 2027 TOGETHER
 
 COMMANDING
   - Everything starts SHARED: either player can order any task force/flight.
-  - Ctrl+F7 on the campaign map: claim the selected task force or flight
-    (only you can order it), or release it if it's yours.
+  - Select a task force or flight on the campaign map: a panel at the
+    bottom shows who commands it, with a Claim / Release button
+    (Ctrl+F7 does the same). A claimed one only its owner can order.
   - Guest orders go to the host's game; you'll see them a second later.
   - Both players can do everything: move fleets, missions, prepare and
     launch flights, form/split task forces, shipyard and Admiralty orders,

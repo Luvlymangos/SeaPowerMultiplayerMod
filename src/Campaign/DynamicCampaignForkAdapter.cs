@@ -178,6 +178,25 @@ namespace SeapowerMultiplayer.Campaign
 
         // ── Selection (claim hotkey) ──────────────────────────────────────────
 
+        public string? SelectedAssetName()
+        {
+            var mover = SelectedMover();
+            return mover == null ? null : F(mover, "Name") as string;
+        }
+
+        private object? SelectedMover()
+        {
+            try
+            {
+                if (!Singleton<CampaignViewModel>.InstanceExists(false)) return null;
+                var selected = Singleton<CampaignViewModel>.Instance.SelectedGroup;
+                var mirror = GetStatic(_tSession, "Mirror");
+                if (selected == null || mirror == null) return null;
+                return AccessTools.Method(_tMirror, "MoverOf")?.Invoke(mirror, new object[] { selected });
+            }
+            catch { return null; }
+        }
+
         public string? SelectedAssetKey()
         {
             try

@@ -109,6 +109,7 @@ namespace SeapowerMultiplayer.Campaign
         // ── 2. State ── TODO(decompile) ──────────────────────────────────────
 
         public string? SelectedAssetKey() => null;   // TODO(decompile)
+        public string? SelectedAssetName() => null;
 
         public string CaptureState(bool full)
         {

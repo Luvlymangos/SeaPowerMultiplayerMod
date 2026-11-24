@@ -697,6 +697,7 @@ namespace SeapowerMultiplayer.Campaign
                 return;
             }
             if (IsHost) HostTick(); else ClientTick();
+            ClaimPanel.EnsureCreated();
             TickHotkeys();
         }
 
