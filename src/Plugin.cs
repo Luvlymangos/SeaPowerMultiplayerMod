@@ -155,6 +155,8 @@ namespace SeapowerMultiplayer
         internal ConfigEntry<BepInEx.Configuration.KeyboardShortcut> CfgCampaignKeyClaim = null!;
         internal ConfigEntry<BepInEx.Configuration.KeyboardShortcut> CfgCampaignKeyResync = null!;
         internal ConfigEntry<bool> CfgPartnerCursors = null!;
+        internal ConfigEntry<bool> CfgModSync = null!;
+        internal ConfigEntry<bool> CfgModSyncDisableExtras = null!;
 
         // Opt-in diagnostics
         internal ConfigEntry<bool>   CfgShareDiagnostics = null!;
@@ -286,6 +288,12 @@ namespace SeapowerMultiplayer
                 "Seconds between campaign-map state updates sent to the guest while the campaign " +
                 "clock runs (default 1). Lower = smoother guest map, more bandwidth. The guest's " +
                 "map moves fleets between updates on its own, so 1-2 s is usually enough.");
+            CfgModSync = Config.Bind("Mods", "MatchHostMods", true,
+                "GUEST: when you join, make your mods match the host's - subscribe to and download " +
+                "Workshop mods you're missing, update older ones, and tick/untick mods in the mod " +
+                "list in the host's order. You'll be told to restart when it's done.");
+            CfgModSyncDisableExtras = Config.Bind("Mods", "TurnOffModsHostDoesntHave", true,
+                "GUEST: also untick mods the host doesn't have enabled. Off = only add what's missing.");
             CfgPartnerCursors = Config.Bind("Campaign", "PartnerCursors", true,
                 "Show your teammates' mouse cursors on the map (campaign globe and battle map), " +
                 "and send yours to them. Teammates only - never shown to the other side in PvP.");
@@ -571,6 +579,7 @@ namespace SeapowerMultiplayer
             // Co-op campaign layer (fork): command routing + snapshot stream
             Campaign.CampaignSync.Tick();
             PartnerCursors.Tick();
+            ModSync.Tick();
 
             // Hold the sim frozen while a dropped peer is being recovered
             ReconnectManager.Tick();

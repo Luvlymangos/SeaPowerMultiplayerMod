@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2b
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2c
 =========================================================
 
 INSTALL (both players)
@@ -8,6 +8,15 @@ INSTALL (both players)
      from it in Steam. Both players must use THIS build.
   Both players also need Pacific 2027 ("Dynamic Campaign Mod (fork)") and
   Bungalow's "Dynamic Campaign Mod" from the Workshop, same versions.
+
+MATCHING MODS (automatic)
+  When the guest joins, the guest's game makes its mods match the host's:
+  it subscribes to and downloads Workshop mods the guest is missing, updates
+  older ones, and ticks/unticks mods in the mod list in the host's order.
+  When it's done it says so - then the guest restarts Sea Power and rejoins.
+  Mods that aren't on the Workshop are named so the host can send them.
+  Turn off: [Mods] MatchHostMods = false (or TurnOffModsHostDoesntHave = false
+  to only add what's missing).
 
 PLAY PACIFIC 2027 TOGETHER
   1. Host: load your Pacific 2027 campaign.

@@ -755,6 +755,7 @@ namespace SeapowerMultiplayer
                 JamStateManager.Reset();
                 Campaign.CampaignSync.Reset();
                 PartnerCursors.Reset();
+                ModSync.Reset();
                 UnitStatusManager.Reset();
                 OrderRefusalNotice.Reset();
                 AttackDesignationSync.Reset();
@@ -1187,6 +1188,21 @@ namespace SeapowerMultiplayer
                 {
                     var msg = CampaignResyncRequestMessage.Deserialize(reader);
                     _mainThreadQueue.Enqueue(() => Campaign.CampaignSync.HandleResyncRequest(msg));
+                    break;
+                }
+
+                case MessageType.ModListEntry:
+                {
+                    var msg = ModListEntryMessage.Deserialize(reader);
+                    _mainThreadQueue.Enqueue(() => ModSync.HandleEntry(msg));
+                    break;
+                }
+
+                case MessageType.ModSyncReport:
+                {
+                    var msg = ModSyncReportMessage.Deserialize(reader);
+                    byte slot = SlotOf(from);
+                    _mainThreadQueue.Enqueue(() => ModSync.HandleReport(slot, msg));
                     break;
                 }
 

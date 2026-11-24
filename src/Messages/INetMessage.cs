@@ -54,6 +54,8 @@ namespace SeapowerMultiplayer.Messages
         CampaignResyncRequest    = 48,  // client → host: send me a full campaign snapshot
         CampaignOwnership        = 49,  // host → client: who holds which campaign post / asset
         PartnerCursor            = 50,  // both ways (host relays): a teammate's mouse position on the map
+        ModListEntry             = 51,  // host → client: one of the host's enabled mods (fork: mod matching)
+        ModSyncReport            = 52,  // client → host: what the guest changed to match
     }
 
     public interface INetMessage
