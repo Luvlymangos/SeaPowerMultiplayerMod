@@ -33,6 +33,11 @@ namespace SeapowerMultiplayer.Campaign
             public Func<object?, object?[], CampaignCommand?> Capture = null!;
             /// <summary>Host: perform the command. Return false + reason to refuse.</summary>
             public ExecuteFn Execute = null!;
+            /// <summary>The guest ALSO runs the call locally (a prediction): for actions
+            /// that hand back a new object the guest's UI needs at once (a prepared
+            /// flight, a new task force). The host still makes the real one; the next
+            /// update replaces the guest's copy (same id - the id counters are synced).</summary>
+            public bool Predict;
         }
 
         public delegate bool ExecuteFn(CampaignCommand command, out string reason);
@@ -109,7 +114,8 @@ namespace SeapowerMultiplayer.Campaign
             if (cmd == null) return true;
             if (string.IsNullOrEmpty(cmd.Id)) cmd.Id = b.CommandId;
 
-            return CampaignSync.InterceptLocal(cmd);
+            bool runLocally = CampaignSync.InterceptLocal(cmd);
+            return runLocally || (b.Predict && !Plugin.Instance.CfgIsHost.Value);
         }
 
         // ── Reflection helpers for adapters ───────────────────────────────────

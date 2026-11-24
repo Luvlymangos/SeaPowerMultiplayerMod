@@ -40,8 +40,9 @@ namespace SeapowerMultiplayer.Campaign
     ///   Orders / Missions / BaseStrikes / AirOperations methods the UI calls are
     ///   patched. On the guest the call is encoded (ids, coordinates) and sent to
     ///   the host, which runs the same method through the fork's own code. Actions
-    ///   whose arguments can't be encoded, or that hand back a new object the UI
-    ///   needs at once, are host-only for now (refused on the guest with a message).
+    ///   that hand back a new object the UI needs at once (prepare a flight, form a
+    ///   task force) ALSO run on the guest as a prediction; the id counters are
+    ///   synced, so the host's real object arrives with the same id and replaces it.
     ///
     /// OWNERSHIP: keys "tf:{id}" (task force) and "fl:{id}" (flight). Everything is
     /// Shared until claimed (Ctrl+F7 on the selected one).
@@ -53,7 +54,9 @@ namespace SeapowerMultiplayer.Campaign
         // ── Types ─────────────────────────────────────────────────────────────
         private Type? _tSession, _tBattle, _tSim, _tState, _tSave, _tHeader, _tDefinition,
                       _tMover, _tTaskForce, _tFlight, _tHull, _tGeo, _tRoutePoint,
-                      _tBaseDef, _tPendingFlight, _tMirror;
+                      _tBaseDef, _tPendingFlight, _tMirror,
+                      _tCatalogue, _tBuildOrder, _tAdmOrder, _tAdmOp, _tRelief, _tStation, _tPendingMerge,
+                      _tSquadron, _tGroundUnit, _tRefitCount, _tVlsTargetCell;
         private bool _probed, _found;
         private string _version = "";
 
@@ -88,6 +91,17 @@ namespace SeapowerMultiplayer.Campaign
             _tBaseDef      = T("Core.Data.BaseDefinition");
             _tPendingFlight= T("Core.State.PendingFlight");
             _tMirror       = T("Game.Mirror.MapMirror");
+            _tCatalogue    = T("Core.Data.CatalogueEntry");
+            _tBuildOrder   = T("Core.State.BuildOrder");
+            _tAdmOrder     = T("Core.State.AdmiraltyOrder");
+            _tAdmOp        = T("Core.State.AdmiraltyOperation");
+            _tRelief       = T("Core.State.ReliefStation");
+            _tStation      = T("Core.State.Station");
+            _tPendingMerge = T("Core.State.PendingMerge");
+            _tSquadron     = T("Core.State.Squadron");
+            _tGroundUnit   = T("Core.State.GroundUnit");
+            _tRefitCount   = T("Core.Sim.RefitCount");
+            _tVlsTargetCell= T("Core.State.VlsTargetCell");
 
             var missing = new List<string>();
             foreach (var (n, t) in new (string, Type?)[] {
@@ -216,6 +230,16 @@ namespace SeapowerMultiplayer.Campaign
         }
 
         private readonly Dictionary<string, Sent> _sent = new();   // key -> what the guest has
+
+        /// <summary>Other id'd lists the guest sees changes in (whole elements, the
+        /// fork's own JSON). Squadrons are big, so they are checked every 5th update.</summary>
+        private static readonly (string field, bool every)[] TrackedLists =
+        {
+            ("PendingFlights", true), ("BuildOrders", true), ("AdmiraltyOrders", true),
+            ("Operations", true), ("ReliefStations", true), ("GroundUnits", true), ("Squadrons", false),
+        };
+        private readonly Dictionary<string, Dictionary<string, int>> _listSent = new();
+        private int _deltaCount;
         private readonly HashSet<object> _feedSent = new(ReferenceEqualityComparer.Instance);
         private string _radarSent = "";
 
@@ -326,9 +350,34 @@ namespace SeapowerMultiplayer.Campaign
             _feedSent.Clear();
             if (F(state, "Feed") is IList feed) foreach (var x in feed) if (x != null) _feedSent.Add(x);
             _radarSent = RadarOf(state);
+            _listSent.Clear();
+            foreach (var (field, _) in TrackedLists)
+            {
+                var d = _listSent[field] = new Dictionary<string, int>();
+                if (F(state, field) is IList l) foreach (var x in l) if (x != null) d[IdOf(x)] = ElemHash(x);
+            }
 
             Plugin.Log.LogInfo($"[Campaign] fork: full copy captured ({json.Length / 1024} KB, {_sent.Count} movers).");
             return "F\n" + json;
+        }
+
+        private static string IdOf(object x) => Convert.ToString(F(x, "Id"), CultureInfo.InvariantCulture) ?? "";
+
+        private int ElemHash(object x) => StableHash(IdRef.Replace(ToJson(x), ""));
+
+        private IEnumerable<string> KeysIn(object state, string field)
+        {
+            if (F(state, field) is IList l) foreach (var x in l) if (x != null) yield return IdOf(x);
+        }
+
+        private static int StableHash(string s)
+        {
+            unchecked
+            {
+                uint h = 2166136261;
+                for (int i = 0; i < s.Length; i++) { h ^= s[i]; h *= 16777619; }
+                return (int)h;
+            }
         }
 
         private static string RadarOf(object state) =>
@@ -368,6 +417,44 @@ namespace SeapowerMultiplayer.Campaign
             {
                 sb.Append("del ").Append(key).Append('\n');
                 _sent.Remove(key); changes++;
+            }
+
+            // Id counters: anything the guest creates locally (a prediction) then gets
+            // the same id the host's real one will have.
+            sb.Append("ids ").Append(F(state, "_nextId")).Append(' ').Append(F(state, "_nextShipId")).Append('\n');
+
+            bool slow = (++_deltaCount % 5) == 0;
+            if (slow)
+            {
+                // Full key lists: clears predictions the host never made.
+                sb.Append("lk TaskForces ").Append(string.Join(",", KeysIn(state, "TaskForces"))).Append('\n');
+                sb.Append("lk Flights ").Append(string.Join(",", KeysIn(state, "Flights"))).Append('\n');
+            }
+            foreach (var (field, every) in TrackedLists)
+            {
+                if (!every && !slow) continue;
+                if (F(state, field) is not IList list) continue;
+                if (!_listSent.TryGetValue(field, out var sentList)) _listSent[field] = sentList = new Dictionary<string, int>();
+                var seen = new HashSet<string>();
+                foreach (var x in list)
+                {
+                    if (x == null) continue;
+                    string id = IdOf(x);
+                    seen.Add(id);
+                    string json = ToJson(x);
+                    int h = StableHash(IdRef.Replace(json, ""));
+                    if (sentList.TryGetValue(id, out var old) && old == h) continue;
+                    sentList[id] = h;
+                    sb.Append("lobj ").Append(field).Append(' ').Append(id).Append(' ').Append(json.Replace('\n', ' ')).Append('\n');
+                    changes++;
+                }
+                var gone = sentList.Keys.Where(k => !seen.Contains(k)).ToList();
+                if (gone.Count > 0)
+                {
+                    foreach (var g in gone) sentList.Remove(g);
+                    sb.Append("ldel ").Append(field).Append(' ').Append(string.Join(",", gone)).Append('\n');
+                    changes++;
+                }
             }
 
             string radar = RadarOf(state);
@@ -545,6 +632,50 @@ namespace SeapowerMultiplayer.Campaign
                         case "del":
                             if (byKey.TryGetValue(rest, out var d)) { d.list.Remove(d.mover); byKey.Remove(rest); }
                             break;
+                        case "ids":
+                        {
+                            var p2 = rest.Split(' ');
+                            SetF(state, "_nextId", int.Parse(p2[0], CultureInfo.InvariantCulture));
+                            SetF(state, "_nextShipId", int.Parse(p2[1], CultureInfo.InvariantCulture));
+                            break;
+                        }
+                        case "lk":
+                        {
+                            int k = rest.IndexOf(' ');
+                            string field = k < 0 ? rest : rest.Substring(0, k);
+                            var keep = new HashSet<string>((k < 0 ? "" : rest.Substring(k + 1)).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+                            if (F(state, field) is IList l)
+                                for (int i = l.Count - 1; i >= 0; i--)
+                                    if (l[i] != null && !keep.Contains(IdOf(l[i]!)))
+                                    {
+                                        byKey.Remove(KeyOf(l[i]!, _tTaskForce!));
+                                        l.RemoveAt(i);
+                                    }
+                            break;
+                        }
+                        case "lobj":
+                        {
+                            int a = rest.IndexOf(' '), b = rest.IndexOf(' ', a + 1);
+                            string field = rest.Substring(0, a), id = rest.Substring(a + 1, b - a - 1);
+                            if (F(state, field) is not IList l) break;
+                            var elem = l.GetType().GetGenericArguments()[0];
+                            var obj = FromJson(rest.Substring(b + 1), elem);
+                            if (obj == null) break;
+                            int at = -1;
+                            for (int i = 0; i < l.Count; i++) if (l[i] != null && IdOf(l[i]!) == id) { at = i; break; }
+                            if (at >= 0) l[at] = obj; else l.Add(obj);
+                            break;
+                        }
+                        case "ldel":
+                        {
+                            int a = rest.IndexOf(' ');
+                            string field = rest.Substring(0, a);
+                            var del = new HashSet<string>(rest.Substring(a + 1).Split(','));
+                            if (F(state, field) is IList l)
+                                for (int i = l.Count - 1; i >= 0; i--)
+                                    if (l[i] != null && del.Contains(IdOf(l[i]!))) l.RemoveAt(i);
+                            break;
+                        }
                         case "radar":
                             if (F(state, "RadarContacts") is IList rc)
                             {
@@ -651,6 +782,11 @@ namespace SeapowerMultiplayer.Campaign
             ("Core.Sim.AirOperations", "Air"),
             ("Core.Sim.Admiralty", "Admiralty"),
             ("Core.Sim.Shipyards", "Shipyards"),
+            ("Core.Sim.CarrierRefits", "Refits"),
+            ("Core.Sim.VlsRefits", "VlsRefits"),
+            ("Core.Sim.CarrierWings", "Wings"),
+            ("Core.Sim.Reliefs", "Reliefs"),
+            ("Core.Sim.Invasions", "Invasions"),
         };
 
         /// <summary>Player actions, by class. Everything else in these classes is
@@ -667,6 +803,11 @@ namespace SeapowerMultiplayer.Campaign
             ["Air"]       = new[] { "Prepare", "Launch", "Cancel", "Detach" },
             ["Admiralty"] = new[] { "Accept", "Decline" },
             ["Shipyards"] = new[] { "Order", "Cancel", "Deliver" },
+            ["Refits"]    = new[] { "SaveDraft", "Cancel" },
+            ["VlsRefits"] = new[] { "SaveDraft", "Cancel" },
+            ["Wings"]     = new[] { "Replenish" },
+            ["Reliefs"]   = new[] { "Begin", "Stop" },
+            ["Invasions"] = new[] { "Embark", "Disembark", "Land" },
         };
 
         private void BindActions()
@@ -682,7 +823,8 @@ namespace SeapowerMultiplayer.Campaign
                     // Methods the sim itself calls with the same name but other shapes
                     // (e.g. AirOperations.ReturnToBase with optional flags) are left alone
                     // unless they are on the list above for that class.
-                    if (Syncable(m))
+                    bool predict = !Syncable(m) && Predictable(m);
+                    if (Syncable(m) || predict)
                     {
                         string id = $"{simField}.{m.Name}/{string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name))}";
                         var method = m;
@@ -693,6 +835,7 @@ namespace SeapowerMultiplayer.Campaign
                             Target = m,
                             Capture = (inst, args) => Encode(id, method, args),
                             Execute = (CampaignCommand c, out string why) => Execute(field, method, c, out why),
+                            Predict = predict,
                         });
                         synced++;
                     }
@@ -714,6 +857,19 @@ namespace SeapowerMultiplayer.Campaign
             if (r != typeof(void) && r != typeof(string) && r != typeof(bool)) return false;
             foreach (var p in m.GetParameters())
                 if (p.IsOut || p.ParameterType.IsByRef || !CanEncode(p.ParameterType)) return false;
+            return true;
+        }
+
+        /// <summary>Returns something the guest's UI needs at once (or has an out
+        /// parameter): the guest runs it locally as a prediction AND the host runs
+        /// the real one. Every in-argument still has to encode.</summary>
+        private bool Predictable(MethodInfo m)
+        {
+            foreach (var p in m.GetParameters())
+            {
+                if (p.IsOut) continue;
+                if (p.ParameterType.IsByRef || !CanEncode(p.ParameterType)) return false;
+            }
             return true;
         }
 
@@ -775,7 +931,10 @@ namespace SeapowerMultiplayer.Campaign
             if (t == _tGeo) return true;
             var nn = Nullable.GetUnderlyingType(t);
             if (nn != null) return CanEncode(nn);
-            if (_tMover!.IsAssignableFrom(t) || t == _tHull || t == _tBaseDef || t == _tPendingFlight || t == _tRoutePoint) return true;
+            if (_tMover!.IsAssignableFrom(t) || t == _tHull || t == _tBaseDef || t == _tPendingFlight || t == _tRoutePoint
+                || t == _tCatalogue || t == _tBuildOrder || t == _tAdmOrder || t == _tAdmOp || t == _tRelief
+                || t == _tStation || t == _tPendingMerge || t == _tSquadron || t == _tGroundUnit
+                || t == _tRefitCount || t == _tVlsTargetCell) return true;
             if (IsList(t, out var e))
             {
                 if (e.IsGenericType && e.GetGenericTypeDefinition() == typeof(ValueTuple<,>))
@@ -821,6 +980,17 @@ namespace SeapowerMultiplayer.Campaign
             if (t == _tBaseDef) return "b:" + F(v, "id");
             if (t == _tPendingFlight) return "pf:" + F(v, "Id");
             if (t == _tRoutePoint) return EncRoutePoint(v);
+            if (t == _tSquadron) return "sq:" + F(v, "Id");
+            if (t == _tGroundUnit) return "gu:" + F(v, "Id");
+            if (t == _tRefitCount || t == _tVlsTargetCell)    // plain data: the fork's own JSON
+                return "j:" + ToJson(v).Replace('\n', ' ').Replace("\u001d", " ").Replace("\u001e", " ");
+            if (t == _tBuildOrder) return "bo:" + F(v, "Id");
+            if (t == _tAdmOrder) return "ao:" + F(v, "Id");
+            if (t == _tAdmOp) return "aop:" + F(v, "Id");
+            if (t == _tRelief) return "rs:" + F(v, "Id");
+            if (t == _tStation) return "st:" + Num((double)F(v, "Right")!) + "," + Num((double)F(v, "Ahead")!);
+            if (t == _tPendingMerge) return "pm:" + F(v, "FromId") + "," + F(v, "IntoId");
+            if (t == _tCatalogue) return "ce:" + ToJson(v).Replace('\n', ' ').Replace("\u001d", " ").Replace("\u001e", " ");
             if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(ValueTuple<,>))
                 return "t:" + Esc(Enc(t.GetField("Item1")!.GetValue(v))) + "\u001e" + Esc(Enc(t.GetField("Item2")!.GetValue(v)));
             if (v is IEnumerable list)
@@ -866,6 +1036,30 @@ namespace SeapowerMultiplayer.Campaign
                 case "h": return FindHull(int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("ship no longer exists");
                 case "b": return FindBase(body) ?? throw new KeyNotFoundException("base " + body);
                 case "pf": return FindIn("PendingFlights", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("prepared flight no longer exists");
+                case "sq": return FindIn("Squadrons", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("squadron no longer exists");
+                case "gu": return FindIn("GroundUnits", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("ground unit no longer exists");
+                case "j": return FromJson(body, nn ?? t);
+                case "bo": return FindIn("BuildOrders", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("build order no longer exists");
+                case "ao": return FindIn("AdmiraltyOrders", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("Admiralty order no longer exists");
+                case "aop": return FindIn("Operations", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("operation no longer exists");
+                case "rs": return FindIn("ReliefStations", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("relief station no longer exists");
+                case "st":
+                {
+                    var p = body.Split(',');
+                    var st = Activator.CreateInstance(_tStation!)!;   // boxed struct: set fields, then unbox on use
+                    SetF(st, "Right", Dbl(p[0]));
+                    SetF(st, "Ahead", Dbl(p[1]));
+                    return st;
+                }
+                case "pm":
+                {
+                    var p = body.Split(',');
+                    var pm = Activator.CreateInstance(_tPendingMerge!)!;
+                    SetF(pm, "FromId", int.Parse(p[0], CultureInfo.InvariantCulture));
+                    SetF(pm, "IntoId", int.Parse(p[1], CultureInfo.InvariantCulture));
+                    return pm;
+                }
+                case "ce": return FindCatalogue(body);
                 case "rp":
                 {
                     int h = body.LastIndexOf('#');
@@ -915,6 +1109,21 @@ namespace SeapowerMultiplayer.Campaign
             return null;
         }
 
+        /// <summary>The host's own catalogue entry with the same unit/side/nation (the
+        /// shipyard compares entries, so a copy would not do); a copy if not listed.</summary>
+        private object? FindCatalogue(string json)
+        {
+            var copy = FromJson(json, _tCatalogue!);
+            if (copy == null) return null;
+            if (F(Definition, "catalogue") is IList cat)
+                foreach (var e in cat)
+                    if (e != null && Equals(F(e, "unit"), F(copy, "unit")) && Equals(F(e, "side"), F(copy, "side"))
+                        && Equals(F(e, "nation"), F(copy, "nation")) && Equals(F(e, "aircraft"), F(copy, "aircraft"))
+                        && Equals(F(e, "ground"), F(copy, "ground")))
+                        return e;
+            return copy;
+        }
+
         private object? FindBase(string id)
         {
             if (F(Definition, "bases") is IList bases)
@@ -944,6 +1153,16 @@ namespace SeapowerMultiplayer.Campaign
             var result = m.Invoke(target, args);
             if (result is string err && !string.IsNullOrEmpty(err)) { why = err; return false; }
             if (result is false) { why = "The campaign refused that."; return false; }
+            // Predicted actions report failure through an out string ("refused"), a
+            // (thing, error) tuple, or a null result.
+            for (int i = 0; i < ps.Length; i++)
+                if (ps[i].IsOut && args[i] is string outErr && outErr.Length > 0) { why = outErr; return false; }
+            if (result != null && result.GetType().IsGenericType
+                && result.GetType().GetGenericTypeDefinition() == typeof(ValueTuple<,>)
+                && result.GetType().GetField("Item2")?.GetValue(result) is string tupleErr && tupleErr.Length > 0)
+            { why = tupleErr; return false; }
+            if (result == null && m.ReturnType != typeof(void) && m.ReturnType != typeof(string) && !m.ReturnType.IsValueType)
+            { why = "The campaign refused that."; return false; }
             why = "";
             RaiseStateChanged();
             return true;

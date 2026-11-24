@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2b
 =========================================================
 
 INSTALL (both players)
@@ -21,8 +21,10 @@ COMMANDING
   - Ctrl+F7 on the campaign map: claim the selected task force or flight
     (only you can order it), or release it if it's yours.
   - Guest orders go to the host's game; you'll see them a second later.
-  - Host-only for now: shipyard orders, Admiralty orders, preparing and
-    launching air strikes from airfields, refits, forming/splitting task forces.
+  - Both players can do everything: move fleets, missions, prepare and
+    launch flights, form/split task forces, shipyard and Admiralty orders,
+    refits, invasions. Things the guest creates appear at once on their screen
+    and are confirmed by the host's game a second later.
   - Ctrl+F6 (guest): reload the host's campaign if your map looks wrong.
   - Fuel, stocks and intel on the guest's map refresh after each battle
     (or Ctrl+F6); positions and routes update every second.
