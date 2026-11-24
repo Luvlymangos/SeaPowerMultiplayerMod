@@ -31,6 +31,11 @@ if (-not (Test-Path (Join-Path $game 'BepInEx\core\BepInEx.dll'))) {
   Write-Host "BepInEx isn't installed in that folder. Install BepInEx 5 (and R.A.T.S. Keel / Anchor Chain as you normally do) first." -ForegroundColor Red; exit 1
 }
 
+# Sea Power locks the DLL while it runs: the copy would fail (or look like it worked).
+if (Get-Process -Name 'Sea Power' -ErrorAction SilentlyContinue) {
+  Write-Host "Sea Power is running - quit it completely, then run this installer again." -ForegroundColor Red; exit 1
+}
+
 # 1. Anchor Chain / Keel copy (mod menu)
 $sa = Join-Path $game 'Sea Power_Data\StreamingAssets\SeapowerMultiplayer'
 New-Item -ItemType Directory -Force -Path $sa | Out-Null
@@ -39,6 +44,7 @@ Copy-Item (Join-Path $here 'SeapowerMultiplayer\*') $sa -Force
 $plugins = Join-Path $game 'BepInEx\plugins'
 New-Item -ItemType Directory -Force -Path $plugins | Out-Null
 Copy-Item $dll $plugins -Force
+$ver = (Get-Item (Join-Path $plugins 'SeapowerMultiplayer.dll')).LastWriteTime
 Write-Host "Installed to:" -ForegroundColor Green
 Write-Host "  $sa"
 Write-Host "  $plugins\SeapowerMultiplayer.dll"
@@ -56,4 +62,5 @@ if ($lib) {
   }
 }
 Write-Host ""
-Write-Host "Done. Start Sea Power. Your partner installs the same zip." -ForegroundColor Green
+Write-Host "Done (build of $ver). Start Sea Power - the MP menu (Ctrl+F9) should say 'Dynamic Campaign MP'." -ForegroundColor Green
+Write-Host "Your partner installs the same zip." -ForegroundColor Green

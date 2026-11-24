@@ -1047,6 +1047,16 @@ namespace SeapowerMultiplayer.UI
                 text = GameTime.IsPaused() ? "Client ready - unpause to begin" : "Sim synced";
                 brush = Ok;
             }
+            else if (!issue && connected && Campaign.CampaignSync.IsActive
+                     && Campaign.CampaignSync.Adapter.Phase == Campaign.CampaignPhase.Map)
+            {
+                // Fork: on the campaign map the campaign is shared by itself - there is
+                // no mission to start or deploy.
+                text = isHost ? "Campaign shared - your partner sees your map"
+                     : Campaign.CampaignSync.AppliedAny ? "In the host's campaign"
+                     : "Waiting for the host's campaign...";
+                brush = isHost || Campaign.CampaignSync.AppliedAny ? Ok : Warn;
+            }
             else if (!issue && connected)
             {
                 // Connected but nothing synced yet - saying nothing here used to
