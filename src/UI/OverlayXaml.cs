@@ -688,18 +688,7 @@ namespace SeapowerMultiplayer.UI
 
           </StackPanel>
 
-          <!-- Footer. Outside SectionsVisibility on purpose: a failed init hides
-               everything above, and that is precisely when someone needs to ask
-               for help. -->
-          <Border Margin=""0,12,0,0"" Padding=""0,8,0,0""
-                  BorderBrush=""{StaticResource Edge}"" BorderThickness=""0,1,0,0"">
-            <StackPanel>
-              <Button Style=""{StaticResource Btn}"" Content=""Join Discord""
-                      Command=""{Binding JoinDiscordCommand}""/>
-              <TextBlock Text=""{Binding DiscordMsg}"" Style=""{StaticResource Dim}""
-                         Margin=""0,4,0,0"" Visibility=""{Binding DiscordMsgVisibility}""/>
-            </StackPanel>
-          </Border>
+          <!-- Fork: the upstream footer (Join Discord) is removed. -->
         </StackPanel>
       </StackPanel>
     </Border>

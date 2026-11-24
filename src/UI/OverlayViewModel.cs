@@ -847,7 +847,7 @@ namespace SeapowerMultiplayer.UI
 
             RefreshPopups(nm);
 
-            VersionText = $"SeaPower MP  v{PluginInfo.PLUGIN_VERSION}";
+            VersionText = $"Dynamic Campaign MP  v{PluginInfo.PLUGIN_VERSION}";
             bool seated = nm.IsEstablished;
             TeamBadgeText = seated ? Teams.Name(PlayerRegistry.LocalTeam).ToUpperInvariant() : "";
             TeamBadgeVisibility = Vis(seated);
