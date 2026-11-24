@@ -238,7 +238,7 @@ namespace SeapowerMultiplayer
                 Peer = peer,
                 SteamId = steamId,
                 Name = name,
-                Team = SideTable.IsValid(requested) ? requested : Team.Enemy,
+                Team = Team.Host,   // co-op fork: everyone plays on the host's side
                 Connected = true,
                 Established = true,
                 UidBase = ProtocolInfo.UidBaseForSlot(slot),
@@ -265,6 +265,12 @@ namespace SeapowerMultiplayer
         public static void HostSetTeam(byte slot, Team team)
         {
             if (!TryGet(slot, out var p) || p.Team == team) return;
+            // Co-op fork: nobody plays against the host.
+            if (slot != 0 && team != Team.Host)
+            {
+                Plugin.Log.LogInfo($"[Players] Not moving {p.DisplayName} to {team}: co-op only - everyone is on the host's side.");
+                return;
+            }
             p.Team = team;
             Version++;
             Plugin.Log.LogInfo($"[Players] {p.DisplayName} moved to {team}.");
@@ -278,7 +284,7 @@ namespace SeapowerMultiplayer
             for (int i = 1; i < MaxPlayers; i++)
             {
                 var p = _slots[i];
-                if (p != null && (int)p.Team >= sideCount) HostSetTeam(p.Slot, Team.Enemy);
+                if (p != null && p.Team != Team.Host) { p.Team = Team.Host; Version++; }   // co-op fork
             }
         }
 

@@ -1336,10 +1336,10 @@ namespace SeapowerMultiplayer
             // Fork: while the host is in a shared campaign, a joiner is always seated
             // on the host's side - the co-op campaign is the reason they're joining, and
             // landing on the enemy side (a stale PvP invite or setting) would switch it off.
-            if (Plugin.Instance.CfgCampaignSync.Value && Campaign.CampaignSync.Adapter.IsAvailable
-                && Campaign.CampaignSync.Adapter.Phase != Campaign.CampaignPhase.None && requestedTeam != Team.Host)
+            // Co-op fork: always, campaign or not - there is no versus.
+            if (requestedTeam != Team.Host)
             {
-                Log.LogInfo($"[Handshake] Campaign in progress - seating the joiner on my side instead of {requestedTeam}.");
+                Log.LogInfo($"[Handshake] Co-op only - seating the joiner on my side instead of {requestedTeam}.");
                 requestedTeam = Team.Host;
             }
             PlayerInfo? seated = null;

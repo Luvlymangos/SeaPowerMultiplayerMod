@@ -480,7 +480,7 @@ namespace SeapowerMultiplayer.UI
                 SendEnabled    = !sendBusy;
 
                 byte slot = p.Slot;
-                foreach (var team in SideTable.All)
+                foreach (var team in System.Linq.Enumerable.Empty<Team>())   // co-op fork: no side picker
                 {
                     var t = team;
                     Sides.Add(new SideButtonVm(Teams.Name(t), t != p.Team,

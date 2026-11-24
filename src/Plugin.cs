@@ -204,6 +204,7 @@ namespace SeapowerMultiplayer
             // beside them. Kept as a named setting because Quick Start drives versus vs
             // co-op through it, and it is the only lobby-wide seating default there is.
             CfgPvP         = Config.Bind("Network", "PvP",          false,       "Seat joiners who arrive without a team invite on the OPPOSITE team (versus) rather than yours (co-op).");
+            CfgPvP.Value = false;   // co-op fork: versus is not offered
             CfgUsername    = Config.Bind("Network", "Username",     "",          "Name other players see in the roster and the 'send to player' menu. Mainly for LiteNetLib, which has no identity of its own - leave empty there and you show up as \"Player 2\". On Steam this overrides your persona name if set.");
             CfgTransport   = Config.Bind("Network", "Transport",    "LiteNetLib", "Network transport: LiteNetLib (direct IP) or Steam (P2P with invites)");
             CfgTimeVote    = Config.Bind("Network", "TimeVote",     false,       "Time vote mode: both players must agree on time compression changes");

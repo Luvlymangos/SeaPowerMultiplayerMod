@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2r
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2s
 =========================================================
 
 INSTALL (every player - up to 4)
