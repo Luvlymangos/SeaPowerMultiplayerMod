@@ -694,6 +694,20 @@ namespace SeapowerMultiplayer.UI
     </Border>
   </ScrollViewer>
 
+  <!-- ══ Fork: claim box - bottom left, above the campaign screen's bottom bar,
+       clear of its left toolbar. Shown with the panel closed (AnyPopupActive). -->
+  <Border HorizontalAlignment=""Left"" VerticalAlignment=""Bottom"" Margin=""72,0,0,48""
+          Width=""300"" CornerRadius=""6"" Padding=""10""
+          Background=""{StaticResource Bg.Panel}"" BorderBrush=""{StaticResource Edge}"" BorderThickness=""1""
+          Visibility=""{Binding ClaimVisibility}"">
+    <StackPanel>
+      <TextBlock Text=""{Binding ClaimTitle}"" FontWeight=""Bold"" FontSize=""14"" TextTrimming=""CharacterEllipsis""/>
+      <TextBlock Text=""{Binding ClaimStatus}"" Foreground=""{Binding ClaimStatusBrush}"" Margin=""0,2,0,8""/>
+      <Button Style=""{StaticResource Btn}"" Content=""{Binding ClaimButtonText}""
+              Command=""{Binding ClaimCommand}"" IsEnabled=""{Binding ClaimButtonEnabled}""/>
+    </StackPanel>
+  </Border>
+
   <!-- ══ Popups - shown even when the panel is closed ════════════════════ -->
 
   <Border Style=""{StaticResource Popup}"" Width=""340"" Visibility=""{Binding TimeVoteVisibility}"">

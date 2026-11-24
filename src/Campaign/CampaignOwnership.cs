@@ -24,6 +24,15 @@ namespace SeapowerMultiplayer.Campaign
 
         public static CampaignSeat DefaultOwner => _default;
 
+        /// <summary>Each seat's colour - the same on both screens, and the same as the
+        /// player's map cursor (slot 0 = host amber, slot 1 = guest cyan).</summary>
+        public static UnityEngine.Color SeatColor(CampaignSeat seat) => seat switch
+        {
+            CampaignSeat.Host  => new UnityEngine.Color(1.00f, 0.75f, 0.10f),
+            CampaignSeat.Guest => new UnityEngine.Color(0.25f, 0.85f, 1.00f),
+            _                  => new UnityEngine.Color(0.85f, 0.85f, 0.85f),
+        };
+
         /// <summary>The asset/post the given seat holds, if exactly one is assigned
         /// to it (Career: each player's post).</summary>
         public static string? HeldBy(CampaignSeat seat)

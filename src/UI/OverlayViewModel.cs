@@ -826,7 +826,78 @@ namespace SeapowerMultiplayer.UI
         public bool AnyPopupActive =>
             _timeVote  == Visibility.Visible || _connLost  == Visibility.Visible ||
             _mismatch  == Visibility.Visible || _allyLock  == Visibility.Visible ||
-            _fatalPopup == Visibility.Visible || _consent == Visibility.Visible;
+            _fatalPopup == Visibility.Visible || _consent == Visibility.Visible ||
+            _claimVis == Visibility.Visible;
+
+        // ── Fork: claim box (co-op campaign map) ─────────────────────────────
+        // Noesis, not IMGUI: the campaign map is Noesis too, and only a Noesis
+        // element takes the click before the map does (an IMGUI button let the
+        // map pan / deselect first).
+        private Visibility _claimVis = Visibility.Collapsed;
+        public Visibility ClaimVisibility { get => _claimVis; private set => Set(ref _claimVis, value); }
+        private string _claimTitle = "";
+        public string ClaimTitle { get => _claimTitle; private set => Set(ref _claimTitle, value); }
+        private string _claimStatus = "";
+        public string ClaimStatus { get => _claimStatus; private set => Set(ref _claimStatus, value); }
+        private Brush _claimBrush = Dim;
+        public Brush ClaimStatusBrush { get => _claimBrush; private set => Set(ref _claimBrush, value); }
+        private string _claimButton = "";
+        public string ClaimButtonText { get => _claimButton; private set => Set(ref _claimButton, value); }
+        private bool _claimEnabled;
+        public bool ClaimButtonEnabled { get => _claimEnabled; private set => Set(ref _claimEnabled, value); }
+        public DelegateCommand ClaimCommand { get; } = new DelegateCommand(_ => ClaimClicked());
+
+        private static string? _claimKey;
+        private static bool _claimWants;     // true = claim, false = release
+
+        private static void ClaimClicked()
+        {
+            if (_claimKey != null && Campaign.CampaignSync.IsActive)
+                Campaign.CampaignSync.ClaimLocal(_claimKey, _claimWants);
+        }
+
+        private static readonly Dictionary<Campaign.CampaignSeat, Brush> _seatBrushes = new();
+        private static Brush SeatBrush(Campaign.CampaignSeat seat)
+        {
+            if (_seatBrushes.TryGetValue(seat, out var b)) return b;
+            var c = Campaign.CampaignOwnership.SeatColor(seat);
+            return _seatBrushes[seat] = Frozen(c.r, c.g, c.b);
+        }
+
+        private void RefreshClaim()
+        {
+            string? key = null;
+            if (Campaign.CampaignSync.IsActive && Campaign.CampaignSync.Adapter.Phase == Campaign.CampaignPhase.Map)
+                key = Campaign.CampaignSync.Adapter.SelectedAssetKey();
+            if (key == null) { _claimKey = null; ClaimVisibility = Visibility.Collapsed; return; }
+
+            _claimKey = key;
+            var owner = Campaign.CampaignOwnership.OwnerOf(key);
+            var me = Plugin.Instance.CfgIsHost.Value ? Campaign.CampaignSeat.Host : Campaign.CampaignSeat.Guest;
+            string partner = "your partner";
+            var all = PlayerRegistry.All;
+            for (int i = 0; i < all.Count; i++)
+                if (all[i] != null && all[i].Connected && all[i].Slot != PlayerRegistry.LocalSlot) { partner = all[i].DisplayName; break; }
+
+            ClaimTitle = Campaign.CampaignSync.Adapter.SelectedAssetName() ?? key;
+            ClaimStatusBrush = SeatBrush(owner);
+            if (owner == me)
+            {
+                ClaimStatus = "Commanded by you"; ClaimButtonText = "Release (Ctrl+F7)";
+                ClaimButtonEnabled = true; _claimWants = false;
+            }
+            else if (owner == Campaign.CampaignSeat.Shared)
+            {
+                ClaimStatus = "Shared - either of you can order it"; ClaimButtonText = "Claim (Ctrl+F7)";
+                ClaimButtonEnabled = true; _claimWants = true;
+            }
+            else
+            {
+                ClaimStatus = $"Commanded by {partner}"; ClaimButtonText = $"Ask {partner} to release it";
+                ClaimButtonEnabled = false;
+            }
+            ClaimVisibility = Visibility.Visible;
+        }
 
         // ── Refresh ──────────────────────────────────────────────────────────
 
@@ -846,6 +917,7 @@ namespace SeapowerMultiplayer.UI
             bool connected = nm.IsConnected;
 
             RefreshPopups(nm);
+            RefreshClaim();
 
             VersionText = $"Dynamic Campaign MP  v{PluginInfo.PLUGIN_VERSION}";
             bool seated = nm.IsEstablished;

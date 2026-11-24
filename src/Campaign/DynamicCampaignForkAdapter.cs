@@ -780,6 +780,13 @@ namespace SeapowerMultiplayer.Campaign
             H.Patch(run,
                 prefix:  new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPrefix)),
                 postfix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(RunPostfix)));
+
+            // Owner colours on the map: after the fork sets each symbol's colour.
+            var sync = AccessTools.Method(_tMirror, "Sync");
+            if (sync != null)
+                H.Patch(sync, postfix: new HarmonyMethod(typeof(DynamicCampaignForkAdapter), nameof(MirrorSyncPostfix)));
+            else
+                Plugin.Log.LogWarning("[Campaign] fork: MapMirror.Sync not found - claimed units won't be coloured.");
         }
 
         private static bool RunPrefix(ref int __result)
@@ -787,6 +794,59 @@ namespace SeapowerMultiplayer.Campaign
             if (!_suppressed) { CampaignSync.SimStepping = true; return true; }
             __result = 0;
             return false;
+        }
+
+        // ── Owner colours ─────────────────────────────────────────────────────
+
+        private readonly Dictionary<object, Noesis.Brush> _origBrush = new(ReferenceEqualityComparer.Instance);
+        private Noesis.SolidColorBrush? _hostBrush, _guestBrush;
+        private float _colorErrorAt = -999f;
+
+        private static void MirrorSyncPostfix(object __instance)
+        {
+            try { _instance?.ApplyOwnerColors(__instance); }
+            catch (Exception ex)
+            {
+                if (_instance != null && UnityEngine.Time.unscaledTime - _instance._colorErrorAt > 30f)
+                {
+                    _instance._colorErrorAt = UnityEngine.Time.unscaledTime;
+                    Plugin.Log.LogWarning($"[Campaign] fork: owner colours failed: {ex.Message}");
+                }
+            }
+        }
+
+        private static Noesis.SolidColorBrush BrushOf(UnityEngine.Color c) =>
+            new(Noesis.Color.FromArgb(255, (byte)(c.r * 255), (byte)(c.g * 255), (byte)(c.b * 255)));
+
+        /// <summary>A claimed task force/flight's map symbol takes its owner's colour on
+        /// both screens; released, it gets the fork's own colour back.</summary>
+        private void ApplyOwnerColors(object mirror)
+        {
+            if (F(mirror, "_groups") is not IDictionary groups) return;
+            bool on = CampaignSync.IsActive;
+            _hostBrush  ??= BrushOf(CampaignOwnership.SeatColor(CampaignSeat.Host));
+            _guestBrush ??= BrushOf(CampaignOwnership.SeatColor(CampaignSeat.Guest));
+
+            foreach (DictionaryEntry e in groups)
+            {
+                if (e.Value is not GroupOfUnits g || e.Key == null) continue;
+                var owner = on ? CampaignOwnership.OwnerOf(KeyOf(e.Key, _tTaskForce!)) : CampaignSeat.Shared;
+                Noesis.SolidColorBrush? want = owner == CampaignSeat.Host ? _hostBrush
+                                             : owner == CampaignSeat.Guest ? _guestBrush : null;
+                var cur = g.UnitColorBrush;
+                if (want != null)
+                {
+                    if (ReferenceEquals(cur, want)) continue;
+                    // Remember the fork's colour (the latest one, if it changed it).
+                    if (!ReferenceEquals(cur, _hostBrush) && !ReferenceEquals(cur, _guestBrush)) _origBrush[g] = cur;
+                    g.UnitColorBrush = want;
+                }
+                else if (_origBrush.TryGetValue(g, out var orig))
+                {
+                    if (ReferenceEquals(cur, _hostBrush) || ReferenceEquals(cur, _guestBrush)) g.UnitColorBrush = orig;
+                    _origBrush.Remove(g);
+                }
+            }
         }
 
         private static void RunPostfix()
