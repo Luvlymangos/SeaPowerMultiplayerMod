@@ -173,6 +173,7 @@ namespace SeapowerMultiplayer.Campaign
         /// so look on first tick rather than in Awake.</summary>
         private static float _nextResolveAt;
         private static MultiCampaignAdapter? _multi;
+        private static bool _sendSoon;
         private static bool _loggedNone;
 
         private static void ResolveAdapter()
@@ -309,6 +310,7 @@ namespace SeapowerMultiplayer.Campaign
             Telemetry.Count(reply.Accepted ? "campaign.cmdAccepted" : "campaign.cmdRefused");
             // Only to the sender: each guest numbers its own commands.
             NetworkManager.Instance.SendToSlot(fromSlot, reply);
+            if (reply.Accepted) { _dirty = true; _sendSoon = true; }
         }
 
         /// <summary>Guests waiting for a complete copy. Only they get it; everyone
@@ -445,7 +447,12 @@ namespace SeapowerMultiplayer.Campaign
             // Continuous clock: while it runs, nearly every frame changes something,
             // so StateChanged is effectively always set and this interval IS the
             // snapshot rate. The guest's presentation-only movement fills the gaps.
-            if (Time.unscaledTime - _lastSnapshotAt < Plugin.Instance.CfgCampaignSnapshotIntervalSec.Value) return;
+            // Right after a guest's order the host answers at once (a tenth of a second
+            // apart at most), so the guest sees it take effect without waiting out the
+            // interval; otherwise the normal rate.
+            float wait = _sendSoon ? 0.1f : Plugin.Instance.CfgCampaignSnapshotIntervalSec.Value;
+            if (Time.unscaledTime - _lastSnapshotAt < wait) return;
+            _sendSoon = false;
             _dirty = false;
             _lastSnapshotAt = Time.unscaledTime;
 
@@ -477,12 +484,14 @@ namespace SeapowerMultiplayer.Campaign
             }
 
             string state;
+            long cpt = CampaignPerf.Start();
             try { state = _adapter.CaptureState(false) ?? ""; }
             catch (Exception ex)
             {
                 Plugin.Log.LogError($"[Campaign] CaptureState threw: {ex}");
                 return;
             }
+            finally { CampaignPerf.Stop("capture update", cpt); }
 
             if (state.Length == 0) return;      // adapter: nothing to send (or not ready)
             int hash = StableHash(state);
@@ -707,7 +716,9 @@ namespace SeapowerMultiplayer.Campaign
             {
                 using (Applying())
                 {
+                    long pt = CampaignPerf.Start();
                     _adapter.ApplyState(state, phase, hostClock, hostTimeScale);
+                    CampaignPerf.Stop(state.StartsWith("F\n") ? "apply full copy" : "apply update", pt);
                     // Host finished the battle and went back to the map: follow it.
                     if (prevHostPhase == CampaignPhase.Battle
                         && (phase == CampaignPhase.Map || phase == CampaignPhase.Resolving))
@@ -788,7 +799,10 @@ namespace SeapowerMultiplayer.Campaign
                 return;
             }
             if (IsHost) HostTick(); else ClientTick();
+            long pt = CampaignPerf.Start();
             try { _adapter.Tick(); } catch (Exception ex) { Plugin.Log.LogWarning($"[Campaign] adapter tick: {ex.Message}"); }
+            CampaignPerf.Stop("adapter tick", pt);
+            CampaignPerf.Tick();
             TickHotkeys();
         }
 

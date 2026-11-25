@@ -311,7 +311,7 @@ namespace SeapowerMultiplayer.Campaign
             ("Messages", true), ("Victor", true), ("VictoryAt", true), ("WeaponsYear", true),
             ("Garrisons", false), ("Stocks", false), ("StocksByClass", false), ("WingStores", false),
             ("AlliedPortStores", false), ("Intel", false), ("Reports", false), ("Log", false),
-            ("Batteries", true), ("Salvos", true), ("Targets", false), ("Strikes", true),   // missiles in flight: every update
+            ("Batteries", true), ("Salvos", true), ("Targets", false), ("Strikes", false),   // missiles in flight every update; the big strike state every 5th
             ("ForkWar", false), ("ForkGarrison", false), ("ForkAdvance", false), ("ForkAdvanceStatus", false),
             ("Disengaged", false), ("PortStockCut", false), ("LandUnitsLost", false), ("ForkLandDamage", false),
             ("RunwayDamagedUntil", false), ("AlertLines", false), ("Recap", false),
@@ -979,6 +979,7 @@ namespace SeapowerMultiplayer.Campaign
         private static void MirrorSyncPostfix(object __instance)
         {
             var me = For(__instance);
+            long pt = CampaignPerf.Start();
             try { me?.ApplyOwnerColors(__instance); }
             catch (Exception ex)
             {
@@ -988,6 +989,7 @@ namespace SeapowerMultiplayer.Campaign
                     Plugin.Log.LogWarning($"[Campaign] {me.Tag}: owner colours failed: {ex.Message}");
                 }
             }
+            finally { CampaignPerf.Stop("unit colours", pt); }
         }
 
         private static Noesis.SolidColorBrush BrushOf(UnityEngine.Color c) =>
@@ -1696,7 +1698,7 @@ namespace SeapowerMultiplayer.Campaign
         {
             if (Plugin.Instance.CfgIsHost.Value || !CampaignSync.IsActive || Phase != CampaignPhase.Map || IsLoading) return;
             if (UnityEngine.Time.unscaledTime < _nextGuestPoll) return;
-            _nextGuestPoll = UnityEngine.Time.unscaledTime + 1f;
+            _nextGuestPoll = UnityEngine.Time.unscaledTime + 2f;
             var state = State;
             if (state == null) return;
             if (!ReferenceEquals(state, _baselineState)) { _guestBaseline.Clear(); _baselineState = state; }
