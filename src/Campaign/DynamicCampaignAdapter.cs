@@ -73,7 +73,8 @@ namespace SeapowerMultiplayer.Campaign
                       _tMover, _tTaskForce, _tFlight, _tHull, _tGeo, _tRoutePoint,
                       _tBaseDef, _tPendingFlight, _tMirror,
                       _tCatalogue, _tBuildOrder, _tAdmOrder, _tAdmOp, _tRelief, _tStation, _tPendingMerge,
-                      _tSquadron, _tGroundUnit, _tRefitCount, _tVlsTargetCell, _tShipFit, _tFrontSupport, _tDefenceOffer;
+                      _tSquadron, _tGroundUnit, _tRefitCount, _tVlsTargetCell, _tShipFit, _tFrontSupport, _tDefenceOffer,
+                      _tCatalogIface, _tNav, _tBattalion, _tSource, _tPoolDef, _tStockDef, _tAlertLine, _tLoadout, _tStrikes;
         private bool _probed, _found;
         private float _nextProbeAt;
         private string _version = "";
@@ -133,6 +134,15 @@ namespace SeapowerMultiplayer.Campaign
             _tShipFit      = T("Core.Data.ShipFit");
             _tFrontSupport = T("Core.State.FrontSupport");
             _tDefenceOffer = T("Core.Data.DefenceOffer");
+            _tCatalogIface = T("Core.Data.IUnitCatalog");
+            _tNav          = T("Core.Geo.NavGrid");
+            _tStrikes      = T("Fork.Strikes");
+            _tBattalion    = T("Fork.MissileBattalion");
+            _tSource       = _tStrikes?.GetNestedType("Source", BindingFlags.Public | BindingFlags.NonPublic);
+            _tPoolDef      = T("Fork.StrikePoolDefinition");
+            _tStockDef     = T("Fork.InterceptorStockDefinition");
+            _tAlertLine    = T("Core.State.AlertLine");
+            _tLoadout      = T("Core.Data.LoadoutSpec");
 
             var missing = new List<string>();
             foreach (var (n, t) in new (string, Type?)[] {
@@ -301,7 +311,7 @@ namespace SeapowerMultiplayer.Campaign
             ("Messages", true), ("Victor", true), ("VictoryAt", true), ("WeaponsYear", true),
             ("Garrisons", false), ("Stocks", false), ("StocksByClass", false), ("WingStores", false),
             ("AlliedPortStores", false), ("Intel", false), ("Reports", false), ("Log", false),
-            ("Batteries", false), ("Salvos", false), ("Targets", false), ("Strikes", false),
+            ("Batteries", true), ("Salvos", true), ("Targets", false), ("Strikes", true),   // missiles in flight: every update
             ("ForkWar", false), ("ForkGarrison", false), ("ForkAdvance", false), ("ForkAdvanceStatus", false),
             ("Disengaged", false), ("PortStockCut", false), ("LandUnitsLost", false), ("ForkLandDamage", false),
             ("RunwayDamagedUntil", false), ("AlertLines", false), ("Recap", false),
@@ -1065,7 +1075,9 @@ namespace SeapowerMultiplayer.Campaign
                                     // base mod
                                     "StrikeRail", "CoverLane", "ReturnToPort", "CoverLanding", "GuardBase", "LandBeach",
                                     "StrikeSite", "FrontSupport", "LandAtField", "LandAboard" },
-            ["Strikes"]   = new[] { "Strike", "Release" },
+            ["Strikes"]   = new[] { "Strike", "Release",
+                                    // base mod: ship missile strikes, rail and site strikes
+                                    "Fire", "FireRail", "FireSite", "StrikeSite", "ReleaseAtSite", "StrikeRail" },
             ["Air"]       = new[] { "Prepare", "Launch", "Cancel", "Detach" },
             ["Admiralty"] = new[] { "Accept", "Decline", "HandDown", "TakeBack" },
             ["Shipyards"] = new[] { "Order", "Cancel", "Deliver", "Decommission" },
@@ -1079,9 +1091,55 @@ namespace SeapowerMultiplayer.Campaign
             ["Supply"]    = new[] { "Hold", "Resume", "Reroute", "SetSource" },   // the Convoys panel
         };
 
+        /// <summary>Player actions that are static methods taking the campaign as an
+        /// argument (the fork's missile strikes, battalions, munitions, intercepts).
+        /// CampaignState / CampaignSim / IUnitCatalog / NavGrid arguments are sent as
+        /// placeholders and the host passes its own.</summary>
+        private static readonly (string type, string[] names)[] StaticActions =
+        {
+            ("Fork.Strikes", new[] { "Launch", "Decide", "DecideTerminal", "DecideScramble" }),
+            ("Fork.Battalions", new[] { "Move", "Reload" }),
+            ("Fork.Munitions", new[] { "BuyEmergency", "Switch", "Click" }),
+            ("Fork.InterceptorStocks", new[] { "Transfer" }),
+            ("Fork.PoolSharing", new[] { "Transfer" }),
+            ("Fork.AlertScramble", new[] { "Launch" }),
+            ("Fork.AirIntercept", new[] { "Scramble" }),
+        };
+
+        private void BindStaticActions(ref int synced)
+        {
+            foreach (var (typeName, names) in StaticActions)
+            {
+                var t = T(typeName);
+                if (t == null) continue;
+                foreach (var m in t.GetMethods(BindingFlags.Static | BindingFlags.Public | BindingFlags.DeclaredOnly))
+                {
+                    if (Array.IndexOf(names, m.Name) < 0) continue;
+                    bool predict = !Syncable(m) && Predictable(m);
+                    if (!Syncable(m) && !predict)
+                    {
+                        Plugin.Log.LogWarning($"[Campaign] {Tag}: can't share {t.Name}.{m.Name}({string.Join(", ", m.GetParameters().Select(x => x.ParameterType.Name))}) - an argument can't be sent.");
+                        continue;
+                    }
+                    string id = $"{_id}:{t.Name}.{m.Name}/{string.Join(",", m.GetParameters().Select(p => p.ParameterType.Name))}";
+                    var method = m;
+                    CampaignInterceptor.Bind(new CampaignInterceptor.Binding
+                    {
+                        CommandId = id,
+                        Target = m,
+                        Capture = (inst, args) => Encode(id, method, args),
+                        Execute = (CampaignCommand c, out string why) => Execute(null, method, c, out why),
+                        Predict = predict,
+                    });
+                    synced++;
+                }
+            }
+        }
+
         private void BindActions()
         {
             int synced = 0, hostOnly = 0;
+            BindStaticActions(ref synced);
             foreach (var (typeName, simField) in ActionClasses)
             {
                 var t = T(typeName);
@@ -1188,13 +1246,22 @@ namespace SeapowerMultiplayer.Campaign
 
         // ── Encoding ──────────────────────────────────────────────────────────
 
+        private static bool IsStringIntMap(Type t)
+        {
+            if (!t.IsGenericType) return false;
+            var g = t.GetGenericTypeDefinition();
+            if (g != typeof(Dictionary<,>) && g != typeof(IDictionary<,>) && g != typeof(IReadOnlyDictionary<,>)) return false;
+            var a = t.GetGenericArguments();
+            return a[0] == typeof(string) && a[1] == typeof(int);
+        }
+
         private bool IsList(Type t, out Type elem)
         {
             elem = typeof(object);
             if (!t.IsGenericType) return false;
             var g = t.GetGenericTypeDefinition();
             if (g != typeof(List<>) && g != typeof(IReadOnlyList<>) && g != typeof(IList<>)
-                && g != typeof(IEnumerable<>) && g != typeof(IReadOnlyCollection<>)) return false;
+                && g != typeof(IEnumerable<>) && g != typeof(IReadOnlyCollection<>) && g != typeof(ICollection<>)) return false;
             elem = t.GetGenericArguments()[0];
             return true;
         }
@@ -1204,6 +1271,10 @@ namespace SeapowerMultiplayer.Campaign
             if (t == typeof(string) || t == typeof(int) || t == typeof(double) || t == typeof(float)
                 || t == typeof(bool) || t.IsEnum) return true;
             if (t == _tGeo) return true;
+            // The host's own campaign / sim / catalogue / sea map.
+            if (t == _tState || t == _tSim || t == _tNav || (t == _tCatalogIface && t != null)) return true;
+            if (t != null && (t == _tBattalion || t == _tSource || t == _tPoolDef || t == _tStockDef || t == _tAlertLine || t == _tLoadout)) return true;
+            if (IsStringIntMap(t!)) return true;
             var nn = Nullable.GetUnderlyingType(t);
             if (nn != null) return CanEncode(nn);
             if (_tMover!.IsAssignableFrom(t) || t == _tHull || t == _tBaseDef || t == _tPendingFlight || t == _tRoutePoint
@@ -1233,6 +1304,10 @@ namespace SeapowerMultiplayer.Campaign
                 cmd.Arg("a" + i, enc);
                 if (cmd.AssetKey.Length == 0 && (enc.StartsWith("tf:") || enc.StartsWith("fl:")))
                     cmd.AssetKey = enc;
+                // A ship's missiles belong to whoever claimed its task force.
+                if (cmd.AssetKey.Length == 0 && _tSource != null && args[i] != null && args[i]!.GetType() == _tSource
+                    && F(args[i], "Group") is object grp && _tMover!.IsInstanceOfType(grp))
+                    cmd.AssetKey = KeyOf(grp, _tTaskForce!);
             }
             return cmd;
         }
@@ -1251,6 +1326,17 @@ namespace SeapowerMultiplayer.Campaign
             }
             var t = v.GetType();
             if (t == _tGeo) { var sb = new StringBuilder("g:"); Geo(v, sb); return sb.ToString(); }
+            if (t == _tState) return "x:st";
+            if (t == _tSim) return "x:sim";
+            if (t == _tNav) return "x:nav";
+            if (_tCatalogIface != null && _tCatalogIface.IsInstanceOfType(v)) return "x:cat";
+            if (t == _tBattalion) return "mb:" + F(v, "Id");
+            if (t == _tSource) return "src:" + F(v, "Key");
+            if (t == _tPoolDef) return "spd:" + F(v, "id");
+            if (t == _tStockDef) return "isd:" + F(v, "side") + "|" + F(v, "nation") + "|" + F(v, "ammo");
+            if (t == _tAlertLine) return "al:" + F(v, "Id");
+            if (t == _tLoadout || v is IDictionary)   // plain data
+                return "j:" + ToJson(v).Replace('\n', ' ').Replace("\u001d", " ").Replace("\u001e", " ");
             if (_tMover!.IsInstanceOfType(v)) return KeyOf(v, _tTaskForce!);
             if (t == _tHull) return "h:" + F(v, "Id");
             if (t == _tBaseDef) return "b:" + F(v, "id");
@@ -1316,7 +1402,40 @@ namespace SeapowerMultiplayer.Campaign
                 case "sq": return FindIn("Squadrons", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("squadron no longer exists");
                 case "fs": return FindIn("FrontSupports", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("front support no longer exists");
                 case "gu": return FindIn("GroundUnits", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("ground unit no longer exists");
-                case "j": return FromJson(body, nn ?? t);
+                case "j":
+                {
+                    var target = nn ?? t;
+                    if (IsStringIntMap(target)) target = typeof(Dictionary<string, int>);
+                    return FromJson(body, target);
+                }
+                case "x":
+                    return body switch
+                    {
+                        "st"  => State,
+                        "sim" => Sim,
+                        "cat" => F(Sim, "Catalog"),
+                        "nav" => F(Sim, "Nav"),
+                        _ => throw new KeyNotFoundException("unknown " + body),
+                    };
+                case "mb":
+                {
+                    int id = int.Parse(body, CultureInfo.InvariantCulture);
+                    if (F(F(State, "Strikes"), "Battalions") is IList bl)
+                        foreach (var x in bl) if (x != null && F(x, "Id") is int i && i == id) return x;
+                    throw new KeyNotFoundException("missile battalion no longer exists");
+                }
+                case "src": return FindSource(body) ?? throw new KeyNotFoundException("that launcher can't fire now");
+                case "spd":
+                    foreach (var x in StrikeDefList("pools")) if ((F(x, "id") as string) == body) return x;
+                    throw new KeyNotFoundException("missile pool " + body);
+                case "isd":
+                {
+                    var p = body.Split('|');
+                    foreach (var x in StrikeDefList("interceptorStocks"))
+                        if ((F(x, "side") as string ?? "") == p[0] && (F(x, "nation") as string ?? "") == p[1] && (F(x, "ammo") as string ?? "") == p[2]) return x;
+                    throw new KeyNotFoundException("interceptor stock " + body);
+                }
+                case "al": return FindIn("AlertLines", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("alert line no longer exists");
                 case "bo": return FindIn("BuildOrders", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("build order no longer exists");
                 case "ao": return FindIn("AdmiraltyOrders", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("Admiralty order no longer exists");
                 case "aop": return FindIn("Operations", int.Parse(body, CultureInfo.InvariantCulture)) ?? throw new KeyNotFoundException("operation no longer exists");
@@ -1371,6 +1490,28 @@ namespace SeapowerMultiplayer.Campaign
             return null;
         }
 
+        private IEnumerable<object> StrikeDefList(string field)
+        {
+            var def = AccessTools.Method(_tStrikes, "Def")?.Invoke(null, new[] { State });
+            return F(def, field) is IList l ? l.Cast<object>().Where(x => x != null) : Enumerable.Empty<object>();
+        }
+
+        /// <summary>The host's launch source with this key, for the side that has it.</summary>
+        private object? FindSource(string key)
+        {
+            var sources = AccessTools.Method(_tStrikes, "Sources");
+            var state = State;
+            if (sources == null || state == null) return null;
+            var sides = new List<string>();
+            if (F(state, "PlayerSideId") is string me) sides.Add(me);
+            if (F(Definition, "sides") is IList sl)
+                foreach (var sd in sl) if (F(sd, "id") is string sid && !sides.Contains(sid)) sides.Add(sid);
+            foreach (var side in sides)
+                if (sources.Invoke(null, new[] { state, F(Sim, "Catalog"), side }) is IList found)
+                    foreach (var src in found) if (src != null && (F(src, "Key") as string) == key) return src;
+            return null;
+        }
+
         private object? FindIn(string listField, int id)
         {
             if (F(State, listField) is IList list)
@@ -1409,10 +1550,10 @@ namespace SeapowerMultiplayer.Campaign
             return null;
         }
 
-        private bool Execute(string simField, MethodInfo m, CampaignCommand c, out string why)
+        private bool Execute(string? simField, MethodInfo m, CampaignCommand c, out string why)
         {
-            var target = F(Sim, simField);
-            if (target == null) { why = "The host's campaign isn't running."; return false; }
+            var target = simField == null ? null : F(Sim, simField);
+            if (Sim == null || (simField != null && target == null)) { why = "The host's campaign isn't running."; return false; }
             var ps = m.GetParameters();
             var args = new object?[ps.Length];
             try
