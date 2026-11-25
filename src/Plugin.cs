@@ -155,6 +155,7 @@ namespace SeapowerMultiplayer
         internal ConfigEntry<BepInEx.Configuration.KeyboardShortcut> CfgCampaignKeyClaim = null!;
         internal ConfigEntry<BepInEx.Configuration.KeyboardShortcut> CfgCampaignKeyResync = null!;
         internal ConfigEntry<bool> CfgPartnerCursors = null!;
+        internal ConfigEntry<bool> CfgPartnerCursorsInBattle = null!;
         internal ConfigEntry<bool> CfgModSync = null!;
         internal ConfigEntry<bool> CfgModSyncDisableExtras = null!;
 
@@ -298,6 +299,9 @@ namespace SeapowerMultiplayer
             CfgPartnerCursors = Config.Bind("Campaign", "PartnerCursors", true,
                 "Show your teammates' mouse cursors on the map (campaign globe and battle map), " +
                 "and send yours to them. Teammates only - never shown to the other side in PvP.");
+            CfgPartnerCursorsInBattle = Config.Bind("Campaign", "PartnerCursorsInBattle", true,
+                "In battles, show teammates' mouse cursors on the tactical map (only while it's on screen). " +
+                "false = campaign map only.");
             CfgCampaignKeyClaim = Config.Bind("Campaign", "KeyClaim",
                 new BepInEx.Configuration.KeyboardShortcut(KeyCode.F7, KeyCode.LeftControl),
                 "Campaign map: claim the selected task force or flight (only you can order it), " +

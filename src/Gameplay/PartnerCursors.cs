@@ -94,6 +94,9 @@ namespace SeapowerMultiplayer
 
             // Mouse left the game window, or no map on screen: hide ours.
             if (_localMap == null || !Application.isFocused) _context = 0;
+            // In a battle, only while the pointer is on the tactical map that's shown
+            // (not the 3D view with a map hidden behind it).
+            else if (_context == 2 && (!Plugin.Instance.CfgPartnerCursorsInBattle.Value || !MapOnScreen(_localMap, needMouse: true))) _context = 0;
 
             if (Time.unscaledTime - _lastSend < SendInterval) return;
             bool moved = _context != 0 && (System.Math.Abs(_lat - _sentLat) > 1e-6 || System.Math.Abs(_lon - _sentLon) > 1e-6);
@@ -107,6 +110,17 @@ namespace SeapowerMultiplayer
                 Slot = PlayerRegistry.LocalSlot, Context = _context, Lat = _lat, Lon = _lon,
             };
             NetworkManager.Instance.SendToMyTeam(msg, DeliveryMethod.Unreliable);
+        }
+
+        /// <summary>The map is actually displayed (and, if asked, under the mouse).</summary>
+        private static bool MapOnScreen(MapBase map, bool needMouse)
+        {
+            try
+            {
+                if (!map.IsVisible || map.ActualWidth < 2 || map.ActualHeight < 2) return false;
+                return !needMouse || map.IsMouseOver;
+            }
+            catch { return false; }
         }
 
         internal static void OnReceived(PartnerCursorMessage msg)
@@ -142,6 +156,8 @@ namespace SeapowerMultiplayer
             var map = _localMap;
             if (map == null) return;
             byte here = CurrentContext();
+            // Battles: only on the tactical map, and only while it's on screen.
+            if (here == 2 && (!Plugin.Instance.CfgPartnerCursorsInBattle.Value || !MapOnScreen(map, needMouse: false))) return;
 
             foreach (var kv in _remotes)
             {
@@ -153,6 +169,8 @@ namespace SeapowerMultiplayer
                 try
                 {
                     if (!map.TryLocationToView(new GeoPosition(r.Lat, r.Lon), out view)) { r.HasShown = false; continue; }
+                    // Outside the map's own area (e.g. a small map panel): not over the 3D view.
+                    if (view.X < 0 || view.Y < 0 || view.X > map.ActualWidth || view.Y > map.ActualHeight) { r.HasShown = false; continue; }
                     view = map.PointToScreen(view);
                 }
                 catch { r.HasShown = false; continue; }
