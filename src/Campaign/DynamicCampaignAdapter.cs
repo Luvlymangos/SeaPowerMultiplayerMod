@@ -417,7 +417,9 @@ namespace SeapowerMultiplayer.Campaign
         {
             var def = Definition;
             var header = Activator.CreateInstance(_tHeader!)!;
-            SetF(header, "Format", 2);
+            // The mod's own save format (fork 2, base mod 6 - which refuses anything older).
+            var fmt = _tSave!.GetField("FormatVersion", BindingFlags.Public | BindingFlags.Static);
+            if (fmt != null && fmt.IsLiteral) SetF(header, "Format", Convert.ToInt32(fmt.GetRawConstantValue(), CultureInfo.InvariantCulture));
             SetF(header, "ModVersion", _version);
             SetF(header, "CampaignId", F(def, "id") ?? AccessTools.Property(_tDefinition, "Id")?.GetValue(def));
             SetF(header, "CampaignName", F(def, "name"));
