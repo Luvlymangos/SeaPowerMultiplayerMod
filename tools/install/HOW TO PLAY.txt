@@ -1,4 +1,4 @@
-Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2u
+Sea Power Multiplayer - co-op campaign fork, TEST BUILD 2v
 =========================================================
 
 INSTALL (every player - up to 4)
@@ -59,3 +59,8 @@ BATTLES
 IF SOMETHING BREAKS
   Send BepInEx\LogOutput.log from EVERY PC (in the Sea Power folder),
   plus a line on what you were doing.
+
+UNINSTALL
+  Quit Sea Power, then double-click "Uninstall (double-click me).bat".
+  It removes the mod and its temporary files, and asks before deleting your
+  settings. Your other mods, campaigns and saves are left alone.
