@@ -1284,6 +1284,31 @@ namespace SeapowerMultiplayer
         static void Finalizer() => InProgress = false;
     }
 
+    /// <summary>Co-op fork: true while a unit is executing an attack ORDER (an order
+    /// task in its behaviour tree, which only its owner could have given), so the
+    /// host's ally lock in InsertEngageTask lets its shots through.</summary>
+    internal static class OwnerOrderExecution
+    {
+        [ThreadStatic] private static int _depth;
+        public static bool Active => _depth > 0;
+        public static void Enter() => _depth++;
+        public static void Exit() { if (_depth > 0) _depth--; }
+    }
+
+    [HarmonyPatch(typeof(AttackTask), "OnExecute")]
+    public static class Patch_AttackTask_OnExecute_OwnerOrder
+    {
+        static void Prefix() => OwnerOrderExecution.Enter();
+        static void Finalizer() => OwnerOrderExecution.Exit();
+    }
+
+    [HarmonyPatch(typeof(AttackAtWaypoint), "SingleAttack")]
+    public static class Patch_AttackAtWaypoint_SingleAttack_OwnerOrder
+    {
+        static void Prefix() => OwnerOrderExecution.Enter();
+        static void Finalizer() => OwnerOrderExecution.Exit();
+    }
+
     [HarmonyPatch(typeof(ObjectBase), nameof(ObjectBase.InsertEngageTask))]
     public static class Patch_ObjectBase_InsertEngageTask
     {
@@ -1345,6 +1370,22 @@ namespace SeapowerMultiplayer
             // autoAttack is deliberately exempt: that is CIWS, SAM and auto-engage,
             // and a ship that stops defending itself because a partner clicked on it
             // would be far worse than the problem being fixed.
+            //
+            // Co-op fork: on the HOST, a teammate's unit carrying out an order its owner
+            // gave is not the host's input. Orders are refused when they are GIVEN
+            // (OrderSyncHelper); here the unit is executing one later - an aircraft
+            // only creates its engage task once it has flown into range, by which time
+            // ApplyingFromNetwork is long false. Refusing that left every guest-owned
+            // aircraft unable to fire. So the host lets through: an attack order being
+            // executed (AttackTask / AttackAtWaypoint), the owner's own designation,
+            // or a target the owner ordered fired on. Anything else stays locked.
+            if (!autoAttack && Plugin.Instance.CfgIsHost.Value
+                && (OwnerOrderExecution.Active
+                    || AttackDesignationSync.IsOwnerDesignation(__instance, targetObject)
+                    || (targetObject != null && Patch_ObjectBase_HandleEngageTasks.IsNetworkOrderedPair(__instance.UniqueID, targetObject.UniqueID))))
+            {
+                return true;
+            }
             if (!autoAttack && FormationOwnership.BlocksOrdersFor(__instance))
             {
                 OrderRefusalNotice.Note(__instance);

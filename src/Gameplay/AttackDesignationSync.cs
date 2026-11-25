@@ -84,6 +84,10 @@ namespace SeapowerMultiplayer
         // ── Host: apply ─────────────────────────────────────────────────────────
 
         /// <summary>Called from OrderHandler.Apply under ApplyingFromNetwork.</summary>
+        /// <summary>HOST: the target the unit's owner designated through this path.</summary>
+        internal static bool IsOwnerDesignation(ObjectBase unit, ObjectBase? target) =>
+            target != null && _applied.TryGetValue(unit.UniqueID, out var t) && ReferenceEquals(t, target);
+
         internal static void Apply(ObjectBase unit, PlayerOrderMessage msg)
         {
             var ai = unit._ai;
