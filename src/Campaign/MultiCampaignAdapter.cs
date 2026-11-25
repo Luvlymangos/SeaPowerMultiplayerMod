@@ -81,5 +81,10 @@ namespace SeapowerMultiplayer.Campaign
         /// <summary>A guest runs no campaign of either mod: the host runs it.</summary>
         public void SetSimulationSuppressed(bool suppressed) { foreach (var a in _all) if (a.IsAvailable) a.SetSimulationSuppressed(suppressed); }
         public void ReturnToMap() => Active.ReturnToMap();
+        public System.Collections.IEnumerator? LeaveMapForBattle()
+        {
+            foreach (var a in _all) if (a.IsAvailable && a.LeaveMapForBattle() is { } e) return e;
+            return null;
+        }
     }
 }

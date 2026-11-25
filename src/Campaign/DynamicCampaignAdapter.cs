@@ -1446,6 +1446,17 @@ namespace SeapowerMultiplayer.Campaign
             return true;
         }
 
+        public System.Collections.IEnumerator? LeaveMapForBattle()
+        {
+            if (!IsAvailable) return null;
+            var tS = T("Game.Session.CampaignSession");
+            if (tS == null || AccessTools.PropertyGetter(tS, "UI")?.Invoke(null, null) == null) return null;   // map not up
+            var leave = AccessTools.Method(tS, "LeaveForBattle", new[] { typeof(bool) });
+            if (leave == null) { Plugin.Log.LogWarning($"[Campaign] {Tag}: no LeaveForBattle - can't take the map down for the battle."); return null; }
+            Plugin.Log.LogInfo($"[Campaign] {Tag}: taking the campaign map down for the host's battle.");
+            return leave.Invoke(null, new object[] { true }) as System.Collections.IEnumerator;
+        }
+
         public bool TryExecute(CampaignCommand command, out string reason)
         {
             if (command.Id == FieldSetCommand) return ExecuteFieldSet(command, out reason);

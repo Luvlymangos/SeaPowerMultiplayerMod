@@ -95,6 +95,11 @@ namespace SeapowerMultiplayer.Campaign
         /// <summary>Every frame while campaign sync is active (both sides).</summary>
         void Tick();
 
+        /// <summary>GUEST, before loading the host's battle: take the campaign map down the
+        /// way the campaign mod does for its own battles (UI off, map scene unloaded,
+        /// campaign kept for the return). Null when the map isn't up.</summary>
+        System.Collections.IEnumerator? LeaveMapForBattle();
+
         // ── Client side ───────────────────────────────────────────────────────
 
         /// <summary>
@@ -147,6 +152,7 @@ namespace SeapowerMultiplayer.Campaign
         public string? SelectedAssetName() => null;
         public bool IsLoading => false;
         public void Tick() { }
+        public System.Collections.IEnumerator? LeaveMapForBattle() => null;
 
         public bool TryExecute(CampaignCommand command, out string reason)
         {

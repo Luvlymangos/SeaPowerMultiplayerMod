@@ -679,8 +679,34 @@ namespace SeapowerMultiplayer
 
         // ── Client side ───────────────────────────────────────────────────────
 
-        public static void ApplyReceivedSession(SessionSyncMessage msg)
+        public static void ApplyReceivedSession(SessionSyncMessage msg) => ApplyReceivedSession(msg, false);
+
+        /// <summary>A dynamic campaign's map is its own scene with its UI on top: loading
+        /// the battle beside it leaves the map covering the battle and taking the
+        /// clicks. Take it down first, as the campaign mod does for its own battles.</summary>
+        private static IEnumerator LeaveCampaignMapThenApply(IEnumerator leave, SessionSyncMessage msg)
         {
+            SceneLoading = true;
+            yield return leave;
+            SceneLoading = false;
+            Log.LogInfo("[Session] Campaign map down - loading the host's battle.");
+            ApplyReceivedSession(msg, true);
+        }
+
+        private static void ApplyReceivedSession(SessionSyncMessage msg, bool mapDown)
+        {
+            if (!mapDown)
+            {
+                IEnumerator? leave = null;
+                try { leave = Campaign.CampaignSync.Adapter.LeaveMapForBattle(); }
+                catch (System.Exception ex) { Log.LogWarning($"[Session] Taking the campaign map down failed: {ex.Message}"); }
+                if (leave != null)
+                {
+                    Plugin.Instance.StartCoroutine(LeaveCampaignMapThenApply(leave, msg));
+                    return;
+                }
+            }
+
             Log.LogInfo($"[Session] Received SessionSync: loadByName={msg.LoadByName}, mission={msg.MissionFileName}, save={msg.SaveFileContent?.Length ?? 0}ch, rngSeed={msg.RngSeed}, hostTimeVote={msg.HostTimeVoteEnabled}");
             IsReceiving = true;
 
